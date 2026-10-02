@@ -126,9 +126,13 @@
 ### 打包合同
 
 - `type: module`、`main: lib/index.js`，exports 含 `"."` / `"./client"` /
-  `"./cordis.patch.yml"` / `"./package.json"`。
+  `"./cordis.patch.yml"` / `"./locale/*.json"` / `"./package.json"`。
 - `dsh.bundle.patch` 指向 `cordis.patch.yml`；`dsh.client.platform: 'web'`。
-- `files: ["lib", "cordis.patch.yml", "README.md"]`。
+- `files: ["lib", "assets", "locale/*.json", "cordis.patch.yml", "README.md"]`。
+- **插件卡片展示元数据**：顶层 `icon: "./assets/icon.svg"`（相对路径、≤256 KiB、
+  realpath 后仍在包内）+ `locale/<lang>.json` 的 `meta.title` / `meta.description`
+  （`en.json` 为英文兜底，`zh.json` 跟随界面语言）。`exports` 不放行 `./locale/*.json`
+  或 `files` 漏掉 `assets` / `locale` 时，插件不报错，只是卡片没有美术与文案。
 - **禁止在 dependencies / peerDependencies 声明 `@deepseek-ai/*`**（`schemastery`、`cordis` 例外），
   仅 devDependencies 允许；运行时 import 不受限（由宿主提供）。
 - client bundle 为 CJS，包在 `window.__ModuleLoader__.load({ id, factory })` 中；

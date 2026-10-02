@@ -5,6 +5,7 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "icon": "./assets/icon.svg",
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
@@ -12,6 +13,7 @@
     },
     "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -24,6 +26,8 @@
   },
   "files": [
     "lib",
+    "assets",
+    "locale/*.json",
     "cordis.patch.yml",
     "README.md"
   ],

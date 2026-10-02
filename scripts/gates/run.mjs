@@ -1,20 +1,34 @@
 // dream-admin 的零依赖一致性门禁。
 // 校验那些「写错就加载失败」的打包合同：
 //   - package.json 必备字段 / exports / dsh.bundle.patch / dsh.client / files
+//   - 插件卡片展示元数据：顶层 icon + locale/<lang>.json 的 meta
 //   - package.json 不得声明任何 @deepseek-ai/* 依赖（DSH profile 已提供）
 //   - cordis.patch.yml 的 insert id / name == 包名
 //   - src/index.ts 导出 inject + apply + Config
 //   - src/client/index.ts 导出 inject + apply
 //   - lib/client.js 的 ModuleLoader id == 包名
 // 运行：node scripts/gates/run.mjs   （失败退出码 1）
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, relative, extname, isAbsolute } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const failures = [];
 const ok = (cond, msg) => {
   if (!cond) failures.push(msg);
+};
+
+/**
+ * package.json#files 里的某一条目，会不会把 `relativePath` 发出去？
+ * 精确路径、裸目录、目录 glob 都算发出；其余不算。
+ */
+const ships = (entry, relativePath) => {
+  if (typeof entry !== 'string') return false;
+  const raw = entry.replace(/^\.\//, '');
+  const target = relativePath.replace(/^\.\//, '');
+  if (raw === target) return true;
+  const base = raw.replace(/\/\*\*?.*$/, '').replace(/\/$/, '');
+  return base !== '' && target.startsWith(`${base}/`);
 };
 
 // --- package.json ---
@@ -40,6 +54,76 @@ ok(
   Array.isArray(pkg.files) && pkg.files.includes('cordis.patch.yml'),
   'files must include "cordis.patch.yml"'
 );
+
+// --- 插件卡片展示元数据：icon + locale ---
+// dsh 的 lib/types/package-meta.js 读顶层 `icon`（manifest 相对路径的
+// SVG/PNG/JPEG/WebP，≤256 KiB，realpath 后仍须在 manifest 目录内），
+// 以及 locale/<语言>.json 的 meta.title / meta.description，
+// 两者都走 package.json#exports 解析，且不评估插件代码。
+// 这类错误不会让插件崩，只会悄悄降级插件管理页的卡片，所以交给门禁盯住。
+const ICON_EXTENSIONS = new Set(['.svg', '.png', '.jpg', '.jpeg', '.webp']);
+const MAX_ICON_BYTES = 256 * 1024;
+
+ok(typeof pkg.icon === 'string' && pkg.icon.trim() !== '', 'package.json#icon must be a non-empty string');
+if (typeof pkg.icon === 'string' && pkg.icon.trim() !== '') {
+  const icon = pkg.icon;
+  ok(
+    !isAbsolute(icon) && !/^[A-Za-z][A-Za-z\d+.-]*:/u.test(icon),
+    `package.json#icon must be a relative file path (got ${icon})`
+  );
+  ok(
+    ICON_EXTENSIONS.has(extname(icon).toLowerCase()),
+    `package.json#icon must be SVG, PNG, JPEG or WebP (got ${icon})`
+  );
+  const iconPath = resolve(root, icon);
+  ok(existsSync(iconPath), `package.json#icon target is missing: ${icon}`);
+  if (existsSync(iconPath)) {
+    ok(statSync(iconPath).isFile(), `package.json#icon target must be a regular file: ${icon}`);
+    ok(statSync(iconPath).size <= MAX_ICON_BYTES, `package.json#icon target exceeds 256 KiB: ${icon}`);
+    const local = relative(root, realpathSync(iconPath));
+    ok(
+      !local.startsWith('..') && !isAbsolute(local),
+      `package.json#icon must stay inside the package directory: ${icon}`
+    );
+    ok(
+      Array.isArray(pkg.files) && pkg.files.some((entry) => ships(entry, icon)),
+      `files must ship the icon, or the published package renders no card art (${icon})`
+    );
+  }
+}
+
+ok(
+  Object.keys(pkg.exports ?? {}).some((key) => key.startsWith('./locale/')),
+  'exports must expose ./locale/*.json so dsh can read plugin display text'
+);
+ok(
+  Array.isArray(pkg.files) && pkg.files.some((entry) => ships(entry, 'locale/en.json')),
+  'files must ship locale/*.json, or the published package renders no display text'
+);
+
+const localeDir = join(root, 'locale');
+const LANGUAGE_FILE = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*\.json$/;
+ok(existsSync(localeDir), 'locale/ directory is missing (plugin display text)');
+if (existsSync(localeDir)) {
+  const localeFiles = readdirSync(localeDir).filter((file) => file.endsWith('.json'));
+  ok(localeFiles.includes('en.json'), 'locale/en.json is required as the English fallback');
+  for (const file of localeFiles) {
+    ok(LANGUAGE_FILE.test(file), `locale/${file} must be named after a language id`);
+    try {
+      const meta = JSON.parse(readFileSync(join(localeDir, file), 'utf8')).meta;
+      ok(
+        typeof meta?.title === 'string' && meta.title.trim() !== '',
+        `locale/${file}: meta.title must be a non-empty string`
+      );
+      ok(
+        typeof meta?.description === 'string' && meta.description.trim() !== '',
+        `locale/${file}: meta.description must be a non-empty string`
+      );
+    } catch (error) {
+      failures.push(`locale/${file} must be JSON with a meta block: ${error.message}`);
+    }
+  }
+}
 
 // 禁止声明 @deepseek-ai/* 依赖（devDependencies 允许，仅用于类型）。
 for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies']) {

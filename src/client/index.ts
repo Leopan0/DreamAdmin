@@ -6,6 +6,9 @@
  *      注册页面组件，页面由布局层按 `activePanelId` 选择渲染；
  *   2. `ctx.slots.inject('sidebar.panellist', ...)`：注册左侧栏的入口项。
  *
+ * 另外用 `ctx.commandUi.register(...)` 注册 `/` 菜单里的「记忆整理」入口：宿主命令
+ * 只能是小写 ASCII 名且没有图标字段，中文标题 + 图标只有客户端的 contribution 能提供。
+ *
  * 这也是「管理页面放在插件管理同级、不在设置里」的落点 —— 走 `main` 槽，
  * 而不是 `settings.section`。
  *
@@ -79,6 +82,8 @@ const TXT = {
     dreamDesc:
       '开启后，模型会定期在后台整理、合并与更新记忆，像睡眠中的记忆巩固。' +
       '也可以随时在对话框输入 /memoryup 立即整理一次。',
+    cmdLabel: '记忆整理',
+    cmdDesc: '立即整理一次记忆（等价于 /memoryup）',
     dreamEnabled: '开启记忆梦境',
     dreamOffHint: '记忆梦境已关闭（输入 /memoryup 仍可手动整理一次）。开启后才能选择供应商与模型。',
     dreamNeedModel:
@@ -162,6 +167,8 @@ const TXT = {
     dreamDesc:
       'When on, a model periodically tidies, merges and updates memories in the background, like sleep-time consolidation. ' +
       'You can also run /memoryup in the composer to tidy once, right now.',
+    cmdLabel: 'Tidy memories',
+    cmdDesc: 'Tidy memories once, right now (same as /memoryup)',
     dreamEnabled: 'Enable memory dream',
     dreamOffHint: 'Memory dream is off (you can still run /memoryup to tidy once). Turn it on to pick a provider and model.',
     dreamNeedModel:
@@ -1116,6 +1123,51 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** 斜杠菜单里的中文入口名；贡献项的 `name` 就是用户键入的 token，所以直接用中文。 */
+const CMD_NAME = '记忆';
+
+/**
+ * 注册 `/记忆` 客户端入口：`/` 菜单里显示中文标题 + 图标，点选后转发给宿主命令
+ * `/memoryup` 执行。
+ *
+ * 宿主侧的 `dsh-commands` 强制命令名为 `[a-z][a-z0-9_-]*` 且描述符没有 icon 字段，
+ * 「中文 + 图标」只能由客户端 contribution（`ctx.commandUi`）提供。
+ * 执行仍走宿主命令，因此 `command/run` / `command/done` 生命周期照常落日志，
+ * 结果以对话里的流程节点呈现，不额外弹提示。
+ */
+function registerCommandEntry(ctx: Record<string, any>, t: (key: string) => string): void {
+  // `commandUi` 用 inject 延迟取用：服务可能晚于本插件装配，取不到就只是没有这条菜单项。
+  ctx.inject?.(['commandUi'], (uiCtx: Record<string, any>) => {
+    const commandUi = uiCtx.commandUi;
+    if (!commandUi || typeof commandUi.register !== 'function') return;
+    /** 宿主 commands 的远程门面；同样可能是后装配的，每次现取。 */
+    const remoteCommands = (): any => uiCtx.get?.('remote.commands') ?? uiCtx['remote.commands'];
+    commandUi.register({
+      name: CMD_NAME,
+      label: () => t('cmdLabel'),
+      description: () => t('cmdDesc'),
+      icon: <DreamAdminIcon size={16} />,
+      available: () => remoteCommands() !== undefined,
+      ui: {
+        kind: 'action',
+        run: (session: { sessionId: string }) => {
+          void runMemoryUp(remoteCommands(), session.sessionId);
+        }
+      }
+    });
+  });
+}
+
+/** 把 `/记忆` 转发成宿主命令 `/memoryup`；RPC 本身失败时只留控制台记录。 */
+async function runMemoryUp(remoteCommands: any, sessionId: string): Promise<void> {
+  try {
+    const result = await remoteCommands.execute(sessionId, '/memoryup', []);
+    if (result?.ok !== true) throw new Error(result?.error?.message ?? 'command.execute failed');
+  } catch (error) {
+    console.error('[dream-admin] /记忆 执行失败', error);
+  }
+}
+
 /** client half 入口。 */
 export function apply(ctx: Record<string, any>): void {
   try {
@@ -1126,6 +1178,8 @@ export function apply(ctx: Record<string, any>): void {
       ctx.locale && typeof ctx.locale.bind === 'function'
         ? ctx.locale.bind(NS)
         : (key: string) => (TXT.en as Record<string, string>)[key] ?? key;
+
+    registerCommandEntry(ctx, t);
 
     if (!ctx.slots || typeof ctx.slots.inject !== 'function') {
       console.warn('[dream-admin] slots 服务不可用，记忆管理页未注册');
@@ -1159,6 +1213,6 @@ export function apply(ctx: Record<string, any>): void {
       )
     );
   } catch (error) {
-    console.error('[dream-admin] 记忆管理页注册失败', error);
+    console.error('[dream-admin] 客户端注册失败', error);
   }
 }
