@@ -1,0 +1,33 @@
+# DreamAdmin bundle patch —— 把本插件插入 profile 的入口列表。
+#
+# 由 package.json 的 `dsh.bundle.patch` 声明，因此 `dsh plugin add` 会把包
+# 纳入 `dsh.profile.bundles`，profile 启动时自动套用该层，无需手工改
+# cordis.patch.yml。
+#
+# 该 patch 叠加在一个空入口列表上（bundle 层先于 profile 自身的
+# cordis.patch.yml 组合），所以就是一个裸 `insert`。id / name 必须等于
+# package.json#name。
+#
+# 所有配置节都在 schema 里声明为 volatile：插件管理页的表单改动即时对运行中
+# 的实例生效；本文件里的 config 块只是「初始默认值」，运行期的改动由本插件
+# 自己的配置接口写入 <DSH_HOME>/dream-admin/config.json 持久保存。
+#
+# evolve（记忆梦境）默认关闭，且没有硬编码的 provider/model —— 必须先开启开关，
+# 再在记忆管理页里从 DSH 模型列表中选一个。
+- insert:
+    - id: dream-admin
+      name: dream-admin
+      config:
+        store:
+          dir: memory
+          scope: workspace
+        recall:
+          enabled: true
+          limit: 5
+          maxChars: 4000
+        evolve:
+          enabled: false
+          provider: ''
+          model: ''
+          intervalMinutes: 30
+          minMemories: 3
