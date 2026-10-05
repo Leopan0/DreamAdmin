@@ -12,8 +12,9 @@
 # 的实例生效；本文件里的 config 块只是「初始默认值」，运行期的改动由本插件
 # 自己的配置接口写入 <DSH_HOME>/dream-admin/config.json 持久保存。
 #
-# evolve（记忆梦境）默认关闭，且没有硬编码的 provider/model —— 必须先开启开关，
-# 再在记忆管理页里从 DSH 模型列表中选一个。
+# evolve（入梦）与 capture（整理记忆）默认关闭，且没有硬编码的 provider/model ——
+# 必须先开启开关，再在记忆管理页里从 DSH 模型列表中选一个。两者相互独立：
+# capture 从历史会话里提炼记忆，evolve 只对已有记忆做合并 / 去重 / 提炼。
 - insert:
     - id: dream-admin
       name: dream-admin
@@ -25,6 +26,14 @@
           enabled: true
           limit: 5
           maxChars: 4000
+        capture:
+          enabled: false
+          provider: ''
+          model: ''
+          intervalMinutes: 30
+          maxSessions: 20
+          maxMessages: 200
+          maxChars: 24000
         evolve:
           enabled: false
           provider: ''

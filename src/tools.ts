@@ -1,5 +1,5 @@
 /**
- * 面向模型的记忆工具：save / search / list / forget。
+ * 面向模型的记忆工具：search / list / forget。
  *
  * 用 `@deepseek-ai/dsh-tools` 的 `defineTool` 定义（它会做参数 schema 转换与
  * 执行期校验）。该模块由 DSH 宿主提供，因此保持外部导入。
@@ -15,8 +15,7 @@ import {
   isValidId,
   listMemories,
   readMemory,
-  searchMemories,
-  writeMemory
+  searchMemories
 } from './store.js';
 
 /** 工具依赖面。 */
@@ -48,43 +47,6 @@ function summaryLine(index: number, id: string, title: string, tags: string[], p
  */
 export function registerMemoryTools(ctx: Context, deps: ToolDeps): () => void {
   const disposers: Array<() => void> = [];
-
-  disposers.push(
-    ctx.tools.register(
-      defineTool({
-        name: 'memory_save',
-        description:
-          '把一条长期记忆写入当前工作区的记忆库（Markdown + frontmatter，用户可在 DreamAdmin 记忆管理页编辑）。' +
-          '适用于用户明确表达的偏好、项目约定、关键事实与结论。传 id 时覆盖同一条记忆。',
-        parameters: {
-          body: { type: 'string', required: true, description: '记忆正文（Markdown）。' },
-          title: { type: 'string', description: '短标题；省略时沿用已有标题或「未命名记忆」。' },
-          tags: { type: 'array', items: { type: 'string' }, description: '标签，便于检索。' },
-          id: { type: 'string', description: '要覆盖的记忆 id；省略则新建。' },
-          pinned: { type: 'boolean', description: '是否置顶（置顶条目必定参与系统提示召回）。' },
-          workspace: { type: 'string', description: '工作区绝对路径；省略时用当前活跃工作区。' }
-        },
-        output: {
-          schema: { type: 'string' },
-          render: (_args, value) => [{ type: 'text', text: value }]
-        },
-        isConcurrencySafe: () => false,
-        async execute(args, exec) {
-          if (exec.signal.aborted) fail('memory_save 已取消');
-          const root = deps.resolveRoot(args.workspace);
-          const record = writeMemory(root, {
-            id: args.id,
-            title: args.title,
-            body: args.body,
-            tags: args.tags,
-            pinned: args.pinned,
-            source: 'tool'
-          });
-          return `已保存记忆 "${record.title}"（id: ${record.id}）\n目录：${root}\n文件：${record.file}`;
-        }
-      })
-    )
-  );
 
   disposers.push(
     ctx.tools.register(

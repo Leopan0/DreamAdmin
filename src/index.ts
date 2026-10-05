@@ -8,9 +8,12 @@
  *      `<DSH_HOME>/dream-admin/memory`。用户可以用任何编辑器直接改。
  *   2. 召回：`ctx.systemPrompt.context()` 注册动态 context，每个模型轮次把
  *      「置顶 + 最近更新」的记忆注入系统提示。
- *   3. 工具：`memory_save` / `memory_search` / `memory_list` / `memory_forget`。
- *   4. 记忆梦境（可开关）：按间隔调用用户指定的模型，对记忆做合并 / 去重 / 提炼；
- *      也可以在对话框输入 `/memoryup` 立即整理一次（未单独配置模型时用当前对话模型）。
+ *   3. 工具：`memory_search` / `memory_list` / `memory_forget`。
+ *   4. 整理记忆（可开关）：按间隔读取各工作区的历史会话（含已关闭的会话），
+ *      调用用户指定的模型提炼出值得长期记住的事实并写入记忆库；也可以在对话框
+ *      输入 `/memorysave` 立即整理一次。
+ *   5. 入梦（可开关）：按间隔调用用户指定的模型，对已有记忆做合并 / 去重 / 提炼；
+ *      也可以在对话框输入 `/memoryup` 立即入梦一次。
  *
  * 另有一组 `GET/POST /dream-admin/*` 路由，供浏览器侧的「记忆管理」页面（与
  * 插件管理同级的顶级面板）读写记忆与配置。
@@ -35,11 +38,13 @@ import {
   type PluginConfigInput,
   type ResolvedPluginConfig
 } from './config.js';
+import { createCapturer } from './capture.js';
 import { createEvolver } from './evolve.js';
 import { registerMemoryCommand } from './commands.js';
 import { createRootResolver } from './paths.js';
 import { installRecall } from './prompt.js';
 import { registerRoutes } from './routes.js';
+import { createSessionReader } from './sessions.js';
 import { registerMemoryTools } from './tools.js';
 
 export { Config, PLUGIN_NAME, resolvePluginConfig } from './config.js';
@@ -51,11 +56,15 @@ export const name = PLUGIN_NAME;
 /**
  * 本入口通过 `ctx` 访问的服务。
  *
- * - `llm`：记忆梦境调用的模型入口（provider / model 从 DSH 模型列表里选）。
+ * - `llm`：整理记忆 / 入梦调用的模型入口（provider / model 从 DSH 模型列表里选）。
  * - `tools`：注册 memory_* 工具。
  * - `sessions`：读会话 header 的 cwd，得到「当前工作区」。
  * - `systemPrompt`：注入召回的记忆。
  * - `webServer`：承载管理页所需的 `/dream-admin/*` 路由。
+ *
+ * `sessionQuery`（读历史会话）是**可选**服务，不写进 inject：它由
+ * `dsh-session-query-sqlite` 后端挂载，未挂载时「整理记忆」只是产不出内容，
+ * 其余能力照常工作。见 sessions.ts 里的 `ctx.inject`。
  */
 export const inject = ['llm', 'tools', 'sessions', 'systemPrompt', 'webServer'];
 
@@ -72,7 +81,8 @@ export function apply(ctx: Context, config: PluginConfig): void {
       {
         store: sectionValue(config.store),
         recall: sectionValue(config.recall),
-        evolve: sectionValue(config.evolve)
+        evolve: sectionValue(config.evolve),
+        capture: sectionValue(config.capture)
       },
       runtimeOverride ?? {}
     ) as PluginConfigInput;
@@ -99,6 +109,13 @@ export function apply(ctx: Context, config: PluginConfig): void {
   };
 
   const evolver = createEvolver(ctx, { resolved, resolveRoot });
+  const sessionReader = createSessionReader(ctx);
+  const capturer = createCapturer(ctx, {
+    resolved,
+    resolveRoot,
+    sessions: () => ctx.sessions.list(),
+    sessionReader
+  });
 
   const disposeRoutes = registerRoutes(ctx, {
     resolved,
@@ -106,12 +123,13 @@ export function apply(ctx: Context, config: PluginConfig): void {
     applyOverride,
     resolveRoot,
     sessions: () => ctx.sessions.list(),
-    evolver
+    evolver,
+    capturer
   });
 
   const disposeTools = registerMemoryTools(ctx, { resolved, resolveRoot });
 
-  const disposeCommand = registerMemoryCommand(ctx, { evolver });
+  const disposeCommand = registerMemoryCommand(ctx, { evolver, capturer });
 
   const disposeRecall = installRecall(ctx, {
     resolved,
@@ -126,15 +144,18 @@ export function apply(ctx: Context, config: PluginConfig): void {
       disposeCommand();
       disposeRecall();
       evolver.dispose();
+      capturer.dispose();
+      sessionReader.dispose();
     },
-    'dream-admin: 路由 / 工具 / 命令 / 召回 / 记忆梦境 生命周期'
+    'dream-admin: 路由 / 工具 / 命令 / 召回 / 整理记忆 / 入梦 生命周期'
   );
 
   const cfg = resolved();
   ctx.logger.info(
     `dream-admin 已加载（作用域: ${cfg.store.scope}，目录: ${cfg.store.dir}，` +
     `召回: ${cfg.recall.enabled ? `开(${cfg.recall.limit})` : '关'}，` +
-    `记忆梦境: ${cfg.evolve.enabled ? `开(${cfg.evolve.provider}/${cfg.evolve.model})` : '关'}，` +
+    `整理记忆: ${cfg.capture.enabled ? `开(${cfg.capture.provider}/${cfg.capture.model})` : '关'}，` +
+    `入梦: ${cfg.evolve.enabled ? `开(${cfg.evolve.provider}/${cfg.evolve.model})` : '关'}，` +
     `当前记忆根: ${resolveRoot()}）`
   );
 }

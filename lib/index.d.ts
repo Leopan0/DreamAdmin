@@ -8,9 +8,12 @@
  *      `<DSH_HOME>/dream-admin/memory`。用户可以用任何编辑器直接改。
  *   2. 召回：`ctx.systemPrompt.context()` 注册动态 context，每个模型轮次把
  *      「置顶 + 最近更新」的记忆注入系统提示。
- *   3. 工具：`memory_save` / `memory_search` / `memory_list` / `memory_forget`。
- *   4. 记忆梦境（可开关）：按间隔调用用户指定的模型，对记忆做合并 / 去重 / 提炼；
- *      也可以在对话框输入 `/memoryup` 立即整理一次（未单独配置模型时用当前对话模型）。
+ *   3. 工具：`memory_search` / `memory_list` / `memory_forget`。
+ *   4. 整理记忆（可开关）：按间隔读取各工作区的历史会话（含已关闭的会话），
+ *      调用用户指定的模型提炼出值得长期记住的事实并写入记忆库；也可以在对话框
+ *      输入 `/memorysave` 立即整理一次。
+ *   5. 入梦（可开关）：按间隔调用用户指定的模型，对已有记忆做合并 / 去重 / 提炼；
+ *      也可以在对话框输入 `/memoryup` 立即入梦一次。
  *
  * 另有一组 `GET/POST /dream-admin/*` 路由，供浏览器侧的「记忆管理」页面（与
  * 插件管理同级的顶级面板）读写记忆与配置。
@@ -26,11 +29,15 @@ export declare const name = "dream-admin";
 /**
  * 本入口通过 `ctx` 访问的服务。
  *
- * - `llm`：记忆梦境调用的模型入口（provider / model 从 DSH 模型列表里选）。
+ * - `llm`：整理记忆 / 入梦调用的模型入口（provider / model 从 DSH 模型列表里选）。
  * - `tools`：注册 memory_* 工具。
  * - `sessions`：读会话 header 的 cwd，得到「当前工作区」。
  * - `systemPrompt`：注入召回的记忆。
  * - `webServer`：承载管理页所需的 `/dream-admin/*` 路由。
+ *
+ * `sessionQuery`（读历史会话）是**可选**服务，不写进 inject：它由
+ * `dsh-session-query-sqlite` 后端挂载，未挂载时「整理记忆」只是产不出内容，
+ * 其余能力照常工作。见 sessions.ts 里的 `ctx.inject`。
  */
 export declare const inject: string[];
 /** Cordis 插件入口。 */

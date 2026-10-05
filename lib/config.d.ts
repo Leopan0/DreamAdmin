@@ -1,6 +1,6 @@
 /**
  * DreamAdmin 的插件配置：schemastery schema、运行期校验、以及被 store /
- * 召回 / 记忆梦境消费的解析后快照。
+ * 召回 / 整理记忆 / 入梦消费的解析后快照。
  *
  * 同一份 schema 同时支撑 cordis.patch.yml 的 `config:` 块与插件管理页的表单，
  * 所以无论默认值来自哪里，形状都一致。
@@ -34,6 +34,18 @@ export declare const DEFAULT_EVOLVE_MIN_MEMORIES = 3;
 export declare const DEFAULT_EVOLVE_MAX_TOKENS = 4096;
 /** 记忆梦境的系统提示：要求模型只做合并/去重/提炼，并且不发明事实。 */
 export declare const DEFAULT_EVOLVE_PROMPT: string;
+/** 默认「整理记忆」的间隔（分钟）。 */
+export declare const DEFAULT_CAPTURE_INTERVAL_MINUTES = 30;
+/** 默认每个工作区单次整理扫描的历史会话条数上限。 */
+export declare const DEFAULT_CAPTURE_MAX_SESSIONS = 20;
+/** 默认单条会话参与整理的最近消息条数上限。 */
+export declare const DEFAULT_CAPTURE_MAX_MESSAGES = 200;
+/** 默认单次整理送进模型的会话转录字符上限。 */
+export declare const DEFAULT_CAPTURE_MAX_CHARS = 24000;
+/** 单次「整理记忆」调用的输出上限（token）。 */
+export declare const DEFAULT_CAPTURE_MAX_TOKENS = 4096;
+/** 「整理记忆」的系统提示：从会话记录里提炼长期事实，并尽量复用已有条目。 */
+export declare const DEFAULT_CAPTURE_PROMPT: string;
 /**
  * 插件入口 / 配置 schema。默认值写在这里，因此 config 块可以省略它们。
  */
@@ -71,6 +83,27 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
         maxTokens: z<number, number, "defined">;
         prompt: z<string, string, "defined">;
     }>>>, "volatile-defined">;
+    capture: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        provider: z<string, string, "defined">;
+        model: z<string, string, "defined">;
+        intervalMinutes: z<number, number, "defined">;
+        maxSessions: z<number, number, "defined">;
+        maxMessages: z<number, number, "defined">;
+        maxChars: z<number, number, "defined">;
+        maxTokens: z<number, number, "defined">;
+        prompt: z<string, string, "defined">;
+    }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        provider: z<string, string, "defined">;
+        model: z<string, string, "defined">;
+        intervalMinutes: z<number, number, "defined">;
+        maxSessions: z<number, number, "defined">;
+        maxMessages: z<number, number, "defined">;
+        maxChars: z<number, number, "defined">;
+        maxTokens: z<number, number, "defined">;
+        prompt: z<string, string, "defined">;
+    }>>>, "volatile-defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
     store: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         dir: z<string, string, "defined">;
@@ -102,6 +135,27 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
         model: z<string, string, "defined">;
         intervalMinutes: z<number, number, "defined">;
         minMemories: z<number, number, "defined">;
+        maxTokens: z<number, number, "defined">;
+        prompt: z<string, string, "defined">;
+    }>>>, "volatile-defined">;
+    capture: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        provider: z<string, string, "defined">;
+        model: z<string, string, "defined">;
+        intervalMinutes: z<number, number, "defined">;
+        maxSessions: z<number, number, "defined">;
+        maxMessages: z<number, number, "defined">;
+        maxChars: z<number, number, "defined">;
+        maxTokens: z<number, number, "defined">;
+        prompt: z<string, string, "defined">;
+    }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        provider: z<string, string, "defined">;
+        model: z<string, string, "defined">;
+        intervalMinutes: z<number, number, "defined">;
+        maxSessions: z<number, number, "defined">;
+        maxMessages: z<number, number, "defined">;
+        maxChars: z<number, number, "defined">;
         maxTokens: z<number, number, "defined">;
         prompt: z<string, string, "defined">;
     }>>>, "volatile-defined">;
@@ -137,11 +191,24 @@ export interface ResolvedEvolveConfig {
     readonly maxTokens: number;
     readonly prompt: string;
 }
+/** 解析后的「整理记忆」策略。 */
+export interface ResolvedCaptureConfig {
+    readonly enabled: boolean;
+    readonly provider: string;
+    readonly model: string;
+    readonly intervalMinutes: number;
+    readonly maxSessions: number;
+    readonly maxMessages: number;
+    readonly maxChars: number;
+    readonly maxTokens: number;
+    readonly prompt: string;
+}
 /** 完整的、冻结后的插件配置快照。 */
 export interface ResolvedPluginConfig {
     readonly store: ResolvedStoreConfig;
     readonly recall: ResolvedRecallConfig;
     readonly evolve: ResolvedEvolveConfig;
+    readonly capture: ResolvedCaptureConfig;
 }
 /**
  * 把一节可能带 ref 的配置值拆成普通值。声明为 `.volatile()` 的节交付到

@@ -11,7 +11,8 @@
  *   GET    /dream-admin/memory          单条（?id=&workspace=）
  *   POST   /dream-admin/memory          新建 / 覆盖（body: {id?, workspace?, title, body, tags, pinned}）
  *   DELETE /dream-admin/memory          删除（?id=&workspace=）
- *   POST   /dream-admin/evolve          立即执行一次记忆梦境
+ *   POST   /dream-admin/capture         立即整理一次记忆（读历史会话，可带 ?workspace=）
+ *   POST   /dream-admin/evolve          立即入梦一次
  *
  * @module dream-admin/routes
  */
@@ -27,6 +28,7 @@ import {
   type PluginConfigInput,
   type ResolvedPluginConfig
 } from './config.js';
+import type { Capturer } from './capture.js';
 import type { Evolver } from './evolve.js';
 import { globalMemoryRoot, listWorkspaces, type RootResolver, type WorkspaceRef } from './paths.js';
 import { deleteMemory, listMemories, readMemory, searchMemories, writeMemory } from './store.js';
@@ -43,8 +45,10 @@ export interface RouteDeps {
   resolveRoot: RootResolver;
   /** 活着的会话列表（用于工作区发现）。 */
   sessions: () => unknown;
-  /** 记忆梦境执行器。 */
+  /** 入梦执行器。 */
   evolver: Evolver;
+  /** 整理记忆执行器。 */
+  capturer: Capturer;
 }
 
 /** 注册全部 HTTP 路由。@returns 一次性释放全部路由的 disposer。 */
@@ -62,6 +66,7 @@ export function registerRoutes(ctx: Context, deps: RouteDeps): () => void {
           plugin: PLUGIN_NAME,
           store: cfg.store,
           recall: cfg.recall,
+          capture: { ...cfg.capture, prompt: undefined },
           evolve: { ...cfg.evolve, prompt: undefined },
           root: resolveRoot(),
           configFile: storedConfigPath(),
@@ -174,9 +179,8 @@ export function registerRoutes(ctx: Context, deps: RouteDeps): () => void {
               tags?: unknown;
               pinned?: unknown;
             };
-            const targetRoot = resolveRoot(
-              typeof body.workspace === 'string' ? body.workspace : workspace
-            );
+            const targetWorkspace = typeof body.workspace === 'string' ? body.workspace : workspace;
+            const targetRoot = resolveRoot(targetWorkspace);
             if (typeof body.body !== 'string' || body.body.trim().length === 0) {
               json(res, 400, { ok: false, error: 'body is required' });
               return;
@@ -187,7 +191,8 @@ export function registerRoutes(ctx: Context, deps: RouteDeps): () => void {
               body: body.body,
               tags: toTags(body.tags),
               pinned: typeof body.pinned === 'boolean' ? body.pinned : undefined,
-              source: 'manual'
+              source: 'manual',
+              workspace: targetWorkspace
             });
             json(res, 200, { ok: true, root: targetRoot, memory: record });
           } catch (error) {
@@ -206,6 +211,21 @@ export function registerRoutes(ctx: Context, deps: RouteDeps): () => void {
         }
 
         json(res, 405, { error: 'method not allowed' });
+      }
+    }),
+
+    ctx.webServer.register({
+      kind: 'exact',
+      path: `/${PLUGIN_NAME}/capture`,
+      handler: async (req, res) => {
+        if (req.method !== 'POST') {
+          json(res, 405, { error: 'method not allowed' });
+          return;
+        }
+        const url = new URL(req.url ?? '/', 'http://localhost');
+        const workspace = optional(url.searchParams.get('workspace'));
+        const outcome = await deps.capturer.run(true, { workspace });
+        json(res, outcome.ok ? 200 : 409, outcome);
       }
     }),
 
@@ -235,6 +255,7 @@ function configView(deps: RouteDeps, root: string) {
     store: cfg.store,
     recall: cfg.recall,
     evolve: cfg.evolve,
+    capture: cfg.capture,
     root,
     override: deps.currentOverride(),
     configFile: storedConfigPath(),

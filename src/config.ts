@@ -1,6 +1,6 @@
 /**
  * DreamAdmin 的插件配置：schemastery schema、运行期校验、以及被 store /
- * 召回 / 记忆梦境消费的解析后快照。
+ * 召回 / 整理记忆 / 入梦消费的解析后快照。
  *
  * 同一份 schema 同时支撑 cordis.patch.yml 的 `config:` 块与插件管理页的表单，
  * 所以无论默认值来自哪里，形状都一致。
@@ -65,6 +65,43 @@ export const DEFAULT_EVOLVE_PROMPT = [
   '没有任何改动时输出 {"ops":[]}。'
 ].join('\n');
 
+/** 默认「整理记忆」的间隔（分钟）。 */
+export const DEFAULT_CAPTURE_INTERVAL_MINUTES = 30;
+
+/** 默认每个工作区单次整理扫描的历史会话条数上限。 */
+export const DEFAULT_CAPTURE_MAX_SESSIONS = 20;
+
+/** 默认单条会话参与整理的最近消息条数上限。 */
+export const DEFAULT_CAPTURE_MAX_MESSAGES = 200;
+
+/** 默认单次整理送进模型的会话转录字符上限。 */
+export const DEFAULT_CAPTURE_MAX_CHARS = 24000;
+
+/** 单次「整理记忆」调用的输出上限（token）。 */
+export const DEFAULT_CAPTURE_MAX_TOKENS = 4096;
+
+/** 「整理记忆」的系统提示：从会话记录里提炼长期事实，并尽量复用已有条目。 */
+export const DEFAULT_CAPTURE_PROMPT = [
+  '你是 DreamAdmin 的记忆整理引擎。输入是某个工作区最近的会话记录（用户与助手的对话），以及该工作区已有的长期记忆索引。',
+  '你的任务：从对话中提炼出值得长期记住的事实、偏好、约定与结论，写成新的记忆条目，或更新已有的条目。',
+  '',
+  '硬性规则：',
+  '1. 只记录可验证、长期有效的信息：用户偏好、项目约定、关键事实、结论、纠错，以及路径 / 命令 / 标识符等细节。',
+  '2. 不要记录一次性闲聊、临时状态、寒暄，也不要记录模型自己的推理过程。',
+  '3. 若某条信息已被「已有记忆索引」里的条目覆盖，用 update 并给出对应 id；否则用 create 新建。优先复用，避免制造重复条目。',
+  '4. 绝对不要发明对话中不存在的事实。',
+  '5. 每条记忆要自洽、精简（几句话到一小段），标题短而具体，可带少量标签。',
+  '6. 没有值得记录的内容时输出 {"ops":[]}。',
+  '',
+  '只输出一个 JSON 对象，不要任何解释文字、不要 Markdown 代码围栏：',
+  '{',
+  '  "ops": [',
+  '    { "op": "create", "title": "...", "tags": ["..."], "body": "..." },',
+  '    { "op": "update", "id": "<已存在的 id>", "title": "...", "tags": ["..."], "body": "..." }',
+  '  ]',
+  '}'
+].join('\n');
+
 /**
  * 插件入口 / 配置 schema。默认值写在这里，因此 config 块可以省略它们。
  */
@@ -112,12 +149,12 @@ const Config = z
           .boolean()
           .default(false)
           .description(
-            '开启记忆梦境：按间隔调用你指定的模型，自动合并 / 去重 / 提炼记忆。也可以随时在对话框输入 /memoryup 立即整理一次。'
+            '开启入梦：按间隔调用你指定的模型，自动合并 / 去重 / 提炼已有记忆。也可以随时在对话框输入 /memoryup 立即入梦一次。'
           ),
         provider: z
           .string()
           .default('')
-          .description('记忆梦境使用的 provider 路由（从 DSH 模型列表中选择）；留空时 /memoryup 用当前对话模型。'),
+          .description('入梦使用的 provider 路由（从 DSH 模型列表中选择）；留空时 /memoryup 用当前对话模型。'),
         model: z
           .string()
           .default('')
@@ -128,20 +165,20 @@ const Config = z
           .min(1)
           .max(1440)
           .default(DEFAULT_EVOLVE_INTERVAL_MINUTES)
-          .description('自动记忆梦境的间隔（分钟）。'),
+          .description('自动入梦的间隔（分钟）。'),
         minMemories: z
           .number()
           .step(1)
           .min(1)
           .default(DEFAULT_EVOLVE_MIN_MEMORIES)
-          .description('记忆条数低于该值时跳过自动记忆梦境（手动触发不受限）。'),
+          .description('记忆条数低于该值时跳过自动入梦（手动触发不受限）。'),
         maxTokens: z
           .number()
           .step(1)
           .min(1)
           .default(DEFAULT_EVOLVE_MAX_TOKENS)
-          .description('单次记忆梦境调用的最大输出 token 数。'),
-        prompt: z.string().default(DEFAULT_EVOLVE_PROMPT).description('记忆梦境调用的系统提示。')
+          .description('单次入梦调用的最大输出 token 数。'),
+        prompt: z.string().default(DEFAULT_EVOLVE_PROMPT).description('入梦调用的系统提示。')
       })
       .default({
         enabled: false,
@@ -152,9 +189,70 @@ const Config = z
         maxTokens: DEFAULT_EVOLVE_MAX_TOKENS,
         prompt: DEFAULT_EVOLVE_PROMPT
       })
+      .volatile(),
+    capture: z
+      .object({
+        enabled: z
+          .boolean()
+          .default(false)
+          .description(
+            '开启整理记忆：按间隔读取该工作区的历史会话（含已关闭的会话），调用你指定的模型提炼出值得长期记住的事实并写入记忆库。也可以随时在对话框输入 /memorysave 立即整理一次。'
+          ),
+        provider: z
+          .string()
+          .default('')
+          .description('整理记忆使用的 provider 路由（从 DSH 模型列表中选择）；留空时 /memorysave 用当前对话模型。'),
+        model: z
+          .string()
+          .default('')
+          .description('该 provider 下的模型 id；留空时 /memorysave 用当前对话模型。'),
+        intervalMinutes: z
+          .number()
+          .step(1)
+          .min(1)
+          .max(1440)
+          .default(DEFAULT_CAPTURE_INTERVAL_MINUTES)
+          .description('自动整理记忆的间隔（分钟），每个工作区各自计时。'),
+        maxSessions: z
+          .number()
+          .step(1)
+          .min(1)
+          .default(DEFAULT_CAPTURE_MAX_SESSIONS)
+          .description('每个工作区单次最多扫描多少个最近的历史会话。'),
+        maxMessages: z
+          .number()
+          .step(1)
+          .min(1)
+          .default(DEFAULT_CAPTURE_MAX_MESSAGES)
+          .description('单条会话最多取最近多少条消息参与整理。'),
+        maxChars: z
+          .number()
+          .step(1)
+          .min(0)
+          .default(DEFAULT_CAPTURE_MAX_CHARS)
+          .description('单次整理送进模型的会话转录字符上限，超出即截断。0 表示不限制。'),
+        maxTokens: z
+          .number()
+          .step(1)
+          .min(1)
+          .default(DEFAULT_CAPTURE_MAX_TOKENS)
+          .description('单次整理记忆调用的最大输出 token 数。'),
+        prompt: z.string().default(DEFAULT_CAPTURE_PROMPT).description('整理记忆调用的系统提示。')
+      })
+      .default({
+        enabled: false,
+        provider: '',
+        model: '',
+        intervalMinutes: DEFAULT_CAPTURE_INTERVAL_MINUTES,
+        maxSessions: DEFAULT_CAPTURE_MAX_SESSIONS,
+        maxMessages: DEFAULT_CAPTURE_MAX_MESSAGES,
+        maxChars: DEFAULT_CAPTURE_MAX_CHARS,
+        maxTokens: DEFAULT_CAPTURE_MAX_TOKENS,
+        prompt: DEFAULT_CAPTURE_PROMPT
+      })
       .volatile()
   })
-  .description('DreamAdmin：随工作区管理的长期记忆 + 记忆梦境。');
+  .description('DreamAdmin：随工作区管理的长期记忆 + 整理记忆 / 入梦。');
 
 /** 插件配置的推断类型：声明为 `.volatile()` 的节会以 ref 形式交付（`.get()` 取值）。 */
 export type PluginConfig = typeof Config extends z<infer T> ? T : never;
@@ -189,11 +287,25 @@ export interface ResolvedEvolveConfig {
   readonly prompt: string;
 }
 
+/** 解析后的「整理记忆」策略。 */
+export interface ResolvedCaptureConfig {
+  readonly enabled: boolean;
+  readonly provider: string;
+  readonly model: string;
+  readonly intervalMinutes: number;
+  readonly maxSessions: number;
+  readonly maxMessages: number;
+  readonly maxChars: number;
+  readonly maxTokens: number;
+  readonly prompt: string;
+}
+
 /** 完整的、冻结后的插件配置快照。 */
 export interface ResolvedPluginConfig {
   readonly store: ResolvedStoreConfig;
   readonly recall: ResolvedRecallConfig;
   readonly evolve: ResolvedEvolveConfig;
+  readonly capture: ResolvedCaptureConfig;
 }
 
 /**
@@ -212,6 +324,7 @@ export function resolvePluginConfig(config: PluginConfigInput): ResolvedPluginCo
   const store = config?.store ?? ({} as PluginConfigInput['store']);
   const recall = config?.recall ?? ({} as PluginConfigInput['recall']);
   const evolve = config?.evolve ?? ({} as PluginConfigInput['evolve']);
+  const capture = config?.capture ?? ({} as PluginConfigInput['capture']);
 
   const dir = typeof store.dir === 'string' && store.dir.trim().length > 0 ? store.dir.trim() : DEFAULT_MEMORY_DIR;
   const scope: 'workspace' | 'global' = store.scope === 'global' ? 'global' : 'workspace';
@@ -224,6 +337,13 @@ export function resolvePluginConfig(config: PluginConfigInput): ResolvedPluginCo
   const prompt =
     typeof evolve.prompt === 'string' && evolve.prompt.trim().length > 0 ? evolve.prompt : DEFAULT_EVOLVE_PROMPT;
 
+  const captureProvider = typeof capture.provider === 'string' ? capture.provider : '';
+  const captureModel = typeof capture.model === 'string' ? capture.model : '';
+  const capturePrompt =
+    typeof capture.prompt === 'string' && capture.prompt.trim().length > 0
+      ? capture.prompt
+      : DEFAULT_CAPTURE_PROMPT;
+
   return {
     store: { dir, scope },
     recall: { enabled: recall.enabled ?? true, limit, maxChars },
@@ -235,6 +355,17 @@ export function resolvePluginConfig(config: PluginConfigInput): ResolvedPluginCo
       minMemories: clampInt(evolve.minMemories ?? DEFAULT_EVOLVE_MIN_MEMORIES, 1, Number.MAX_SAFE_INTEGER),
       maxTokens: clampInt(evolve.maxTokens ?? DEFAULT_EVOLVE_MAX_TOKENS, 1, Number.MAX_SAFE_INTEGER),
       prompt
+    },
+    capture: {
+      enabled: capture.enabled ?? false,
+      provider: captureProvider,
+      model: captureModel,
+      intervalMinutes: clampInt(capture.intervalMinutes ?? DEFAULT_CAPTURE_INTERVAL_MINUTES, 1, 1440),
+      maxSessions: clampInt(capture.maxSessions ?? DEFAULT_CAPTURE_MAX_SESSIONS, 1, Number.MAX_SAFE_INTEGER),
+      maxMessages: clampInt(capture.maxMessages ?? DEFAULT_CAPTURE_MAX_MESSAGES, 1, Number.MAX_SAFE_INTEGER),
+      maxChars: clampInt(capture.maxChars ?? DEFAULT_CAPTURE_MAX_CHARS, 0, Number.MAX_SAFE_INTEGER),
+      maxTokens: clampInt(capture.maxTokens ?? DEFAULT_CAPTURE_MAX_TOKENS, 1, Number.MAX_SAFE_INTEGER),
+      prompt: capturePrompt
     }
   };
 }
@@ -282,7 +413,8 @@ export function mergeConfig(
   return {
     store: { ...base.store, ...patch.store } as PluginConfigInput['store'],
     recall: { ...base.recall, ...patch.recall } as PluginConfigInput['recall'],
-    evolve: { ...base.evolve, ...patch.evolve } as PluginConfigInput['evolve']
+    evolve: { ...base.evolve, ...patch.evolve } as PluginConfigInput['evolve'],
+    capture: { ...base.capture, ...patch.capture } as PluginConfigInput['capture']
   };
 }
 

@@ -1,5 +1,5 @@
 /** 记忆的来源。 */
-export type MemorySource = 'manual' | 'tool' | 'evolve' | 'import';
+export type MemorySource = 'manual' | 'tool' | 'auto' | 'evolve' | 'import';
 /** 完整的一条记忆。 */
 export interface MemoryRecord {
     id: string;
@@ -12,6 +12,8 @@ export interface MemoryRecord {
     body: string;
     /** 该记忆对应的绝对文件路径。 */
     file: string;
+    /** 记忆归属的工作区绝对路径；空表示默认 / 全局。 */
+    workspace?: string;
 }
 /** 列表用的轻量摘要（含正文预览）。 */
 export interface MemorySummary {
@@ -24,6 +26,8 @@ export interface MemorySummary {
     pinned: boolean;
     preview: string;
     file: string;
+    /** 记忆归属的工作区绝对路径；空表示默认 / 全局。 */
+    workspace?: string;
 }
 /** 新建 / 更新记忆的入参。 */
 export interface MemoryWriteInput {
@@ -33,6 +37,8 @@ export interface MemoryWriteInput {
     tags?: string[];
     pinned?: boolean;
     source?: MemorySource;
+    /** 归属工作区绝对路径；省略时沿用旧值。 */
+    workspace?: string;
 }
 /** 判断 id 是否合法。 */
 export declare function isValidId(id: unknown): id is string;

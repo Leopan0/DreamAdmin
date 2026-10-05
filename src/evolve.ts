@@ -260,7 +260,7 @@ export function createEvolver(ctx: Context, deps: EvolveDeps): Evolver {
 }
 
 /** 从模型输出里抠出第一个 JSON 对象。 */
-function extractJson(text: string): unknown | undefined {
+export function extractJson(text: string): unknown | undefined {
   const withoutFence = text.replace(/```[a-zA-Z]*\n?/g, '');
   const start = withoutFence.indexOf('{');
   const end = withoutFence.lastIndexOf('}');
@@ -273,7 +273,7 @@ function extractJson(text: string): unknown | undefined {
 }
 
 /** 把模型给的 tags 收敛成字符串数组。 */
-function toStringArray(value: unknown): string[] | undefined {
+export function toStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.filter((item): item is string => typeof item === 'string');
 }

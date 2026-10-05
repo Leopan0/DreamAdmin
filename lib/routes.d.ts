@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { type PluginConfigInput, type ResolvedPluginConfig } from './config.js';
+import type { Capturer } from './capture.js';
 import type { Evolver } from './evolve.js';
 import { type RootResolver } from './paths.js';
 /** 路由依赖面。 */
@@ -14,8 +15,10 @@ export interface RouteDeps {
     resolveRoot: RootResolver;
     /** 活着的会话列表（用于工作区发现）。 */
     sessions: () => unknown;
-    /** 记忆梦境执行器。 */
+    /** 入梦执行器。 */
     evolver: Evolver;
+    /** 整理记忆执行器。 */
+    capturer: Capturer;
 }
 /** 注册全部 HTTP 路由。@returns 一次性释放全部路由的 disposer。 */
 export declare function registerRoutes(ctx: Context, deps: RouteDeps): () => void;

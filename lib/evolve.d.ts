@@ -55,3 +55,7 @@ export interface Evolver {
  * 定时器与 disposer 由调用方在插件卸载时释放。
  */
 export declare function createEvolver(ctx: Context, deps: EvolveDeps): Evolver;
+/** 从模型输出里抠出第一个 JSON 对象。 */
+export declare function extractJson(text: string): unknown | undefined;
+/** 把模型给的 tags 收敛成字符串数组。 */
+export declare function toStringArray(value: unknown): string[] | undefined;

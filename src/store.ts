@@ -10,8 +10,9 @@
  *   tags: ["a", "b"]
  *   created: "2026-10-02T07:00:00.000Z"
  *   updated: "2026-10-02T07:00:00.000Z"
- *   source: "manual" | "tool" | "evolve"
+ *   source: "manual" | "tool" | "auto" | "evolve"
  *   pinned: false
+ *   workspace: "<工作区绝对路径，可选>"
  *   ---
  *   正文……
  *
@@ -25,7 +26,7 @@ import { join } from 'node:path';
 import { ensureDir } from './paths.js';
 
 /** 记忆的来源。 */
-export type MemorySource = 'manual' | 'tool' | 'evolve' | 'import';
+export type MemorySource = 'manual' | 'tool' | 'auto' | 'evolve' | 'import';
 
 /** 完整的一条记忆。 */
 export interface MemoryRecord {
@@ -39,6 +40,8 @@ export interface MemoryRecord {
   body: string;
   /** 该记忆对应的绝对文件路径。 */
   file: string;
+  /** 记忆归属的工作区绝对路径；空表示默认 / 全局。 */
+  workspace?: string;
 }
 
 /** 列表用的轻量摘要（含正文预览）。 */
@@ -52,6 +55,8 @@ export interface MemorySummary {
   pinned: boolean;
   preview: string;
   file: string;
+  /** 记忆归属的工作区绝对路径；空表示默认 / 全局。 */
+  workspace?: string;
 }
 
 /** 新建 / 更新记忆的入参。 */
@@ -62,6 +67,8 @@ export interface MemoryWriteInput {
   tags?: string[];
   pinned?: boolean;
   source?: MemorySource;
+  /** 归属工作区绝对路径；省略时沿用旧值。 */
+  workspace?: string;
 }
 
 /** 合法的记忆 id：足够安全，可以直接当文件名。 */
@@ -144,6 +151,7 @@ export function writeMemory(root: string, input: MemoryWriteInput): MemoryRecord
     source: input.source ?? existing?.source ?? 'manual',
     pinned: input.pinned ?? existing?.pinned ?? false,
     body: typeof input.body === 'string' ? input.body : (existing?.body ?? ''),
+    workspace: normalizeWorkspace(input.workspace, existing),
     file
   };
 
@@ -206,7 +214,7 @@ export function renderRecall(records: MemoryRecord[], maxChars: number): string 
     '## 长期记忆（DreamAdmin）',
     '',
     '以下条目来自当前工作区的长期记忆库，是此前会话沉淀下来的事实与偏好，优先于你的先验假设。',
-    '如需更精确的内容，用 `memory_search` 工具检索；需要记住新事实时用 `memory_save`。',
+    '如需更精确的内容，用 `memory_search` 工具检索。',
     ''
   ];
   for (const record of records) {
@@ -231,7 +239,8 @@ function toSummary(record: MemoryRecord): MemorySummary {
     source: record.source,
     pinned: record.pinned,
     preview: truncate(record.body.replace(/\s+/g, ' ').trim(), PREVIEW_CHARS),
-    file: record.file
+    file: record.file,
+    workspace: record.workspace
   };
 }
 
@@ -269,7 +278,8 @@ function readMemoryFile(file: string): MemoryRecord | undefined {
     source: sourceValue(meta.source),
     pinned: meta.pinned === true,
     body,
-    file
+    file,
+    workspace: stringValue(meta.workspace)
   };
   cache.set(file, { mtimeMs, record });
   return record;
@@ -302,9 +312,18 @@ function normalizeTags(tags: string[] | undefined, existing: MemoryRecord | unde
   return result;
 }
 
+/** 归一化归属工作区：显式给了就用（去空），否则沿用旧值。 */
+function normalizeWorkspace(
+  workspace: string | undefined,
+  existing: MemoryRecord | undefined
+): string | undefined {
+  if (typeof workspace === 'string' && workspace.trim().length > 0) return workspace.trim();
+  return existing?.workspace;
+}
+
 /** 把 meta 里可能出现的枚举值收敛到 MemorySource。 */
 function sourceValue(value: unknown): MemorySource {
-  return value === 'tool' || value === 'evolve' || value === 'import' ? value : 'manual';
+  return value === 'tool' || value === 'auto' || value === 'evolve' || value === 'import' ? value : 'manual';
 }
 
 /** 取字符串型 meta 值。 */
@@ -392,7 +411,8 @@ function serializeDocument(record: MemoryRecord): string {
     `created: ${JSON.stringify(record.created)}`,
     `updated: ${JSON.stringify(record.updated)}`,
     `source: ${JSON.stringify(record.source)}`,
-    `pinned: ${record.pinned ? 'true' : 'false'}`
+    `pinned: ${record.pinned ? 'true' : 'false'}`,
+    ...(record.workspace === undefined ? [] : [`workspace: ${JSON.stringify(record.workspace)}`])
   ].join('\n');
   const body = record.body.endsWith('\n') ? record.body : record.body + '\n';
   return `---\n${meta}\n---\n${body}`;

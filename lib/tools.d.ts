@@ -1,5 +1,5 @@
 /**
- * 面向模型的记忆工具：save / search / list / forget。
+ * 面向模型的记忆工具：search / list / forget。
  *
  * 用 `@deepseek-ai/dsh-tools` 的 `defineTool` 定义（它会做参数 schema 转换与
  * 执行期校验）。该模块由 DSH 宿主提供，因此保持外部导入。

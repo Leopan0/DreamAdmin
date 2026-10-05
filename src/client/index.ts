@@ -6,8 +6,9 @@
  *      注册页面组件，页面由布局层按 `activePanelId` 选择渲染；
  *   2. `ctx.slots.inject('sidebar.panellist', ...)`：注册左侧栏的入口项。
  *
- * 另外用 `ctx.commandUi.register(...)` 注册 `/` 菜单里的「记忆整理」入口：宿主命令
- * 只能是小写 ASCII 名且没有图标字段，中文标题 + 图标只有客户端的 contribution 能提供。
+ * 另外用 `ctx.commandUi.register(...)` 注册 `/` 菜单里的「整理记忆」与「入梦」两个入口：
+ * 宿主命令只能是小写 ASCII 名且没有图标字段，中文标题 + 图标只有客户端的 contribution
+ * 能提供。
  *
  * 这也是「管理页面放在插件管理同级、不在设置里」的落点 —— 走 `main` 槽，
  * 而不是 `settings.section`。
@@ -43,7 +44,7 @@ const TXT = {
     refresh: '刷新',
     new: '新建',
     search: '搜索记忆…',
-    empty: '还没有记忆。点「新建」写一条，或在对话里让模型用 memory_save 记录。',
+    empty: '还没有记忆。点「新建」写一条，或开启「整理记忆」让模型从历史会话里提炼。',
     noResult: '没有匹配的记忆。',
     mTitle: '标题',
     mTags: '标签（逗号分隔）',
@@ -78,18 +79,46 @@ const TXT = {
     recallLimit: '最多带上几条',
     recallMaxChars: '最多带多少字',
     recallUnlimited: '0 = 不限',
-    dreamSection: '记忆梦境',
+    captureSection: '整理记忆',
+    captureDesc:
+      '开启后，模型会按间隔读取该工作区的历史会话（含已关闭的会话），把值得长期记住的事实提炼成记忆。' +
+      '每个工作区各自整理。也可以随时在对话框输入 /memorysave 立即整理一次。',
+    captureEnabled: '开启整理记忆',
+    captureOffHint: '整理记忆已关闭（输入 /memorysave 仍可手动整理一次）。开启后才能选择供应商与模型。',
+    captureNeedModel:
+      '已开启，但还没选择供应商和模型：自动整理不会运行；输入 /memorysave 可以用当前对话模型立即整理一次。',
+    captureInterval: '整理间隔',
+    captureMaxSessions: '最多会话数',
+    captureMaxMessages: '每条会话消息数',
+    captureMaxChars: '转录字符上限',
+    runCapture: '立即整理',
+    capturing: '整理中…',
+    captureCreated: '新增',
+    captureUpdated: '更新',
+    lastCapture: '上次整理',
+    neverCapture: '尚未整理',
+    captureLog: '整理记录',
+    captureReasonDisabled: '整理记忆未开启。',
+    captureReasonModel: '未配置供应商或模型（对话框输入 /memorysave 可用当前对话模型）。',
+    captureReasonBusy: '上一次整理还没结束。',
+    captureReasonNoSessions: '会话历史服务不可用，读不到历史会话。',
+    captureReasonNoWorkspaces: '没有已知工作区。',
+    captureReasonError: '调用模型失败。',
+    captureReasonParse: '模型输出无法解析。',
+    captureCmdLabel: '整理记忆',
+    captureCmdDesc: '立即整理一次记忆（等价于 /memorysave）',
+    providerLabel: '模型提供商',
+    modelLabel: '模型',
+    dreamSection: '入梦',
     dreamDesc:
-      '开启后，模型会定期在后台整理、合并与更新记忆，像睡眠中的记忆巩固。' +
-      '也可以随时在对话框输入 /memoryup 立即整理一次。',
-    cmdLabel: '记忆整理',
-    cmdDesc: '立即整理一次记忆（等价于 /memoryup）',
-    dreamEnabled: '开启记忆梦境',
-    dreamOffHint: '记忆梦境已关闭（输入 /memoryup 仍可手动整理一次）。开启后才能选择供应商与模型。',
+      '开启后，模型会定期合并、去重与改写已有记忆，像睡眠中的记忆巩固。' +
+      '也可以随时在对话框输入 /memoryup 立即入梦一次。',
+    cmdLabel: '入梦',
+    cmdDesc: '立即入梦一次（等价于 /memoryup）',
+    dreamEnabled: '开启入梦',
+    dreamOffHint: '入梦已关闭（输入 /memoryup 仍可手动入梦一次）。开启后才能选择供应商与模型。',
     dreamNeedModel:
-      '已开启，但还没选择供应商和模型：自动入梦不会运行；输入 /memoryup 可以用当前对话模型立即整理一次。',
-    dreamProvider: '模型提供商',
-    dreamModel: '模型',
+      '已开启，但还没选择供应商和模型：自动入梦不会运行；输入 /memoryup 可以用当前对话模型立即入梦一次。',
     dreamInterval: '入梦间隔',
     dreamMin: '最少记忆条数',
     unitMinutes: '分钟',
@@ -104,11 +133,11 @@ const TXT = {
     evolveMerged: '合并',
     lastRun: '上次入梦',
     neverRun: '尚未入梦',
-    runLog: '梦境记录',
-    dreamReasonDisabled: '记忆梦境未开启。',
+    runLog: '入梦记录',
+    dreamReasonDisabled: '入梦未开启。',
     dreamReasonModel: '未配置供应商或模型（对话框输入 /memoryup 可用当前对话模型）。',
     dreamReasonFew: '记忆条数不足，本次跳过。',
-    dreamReasonBusy: '上一次梦境还没结束。',
+    dreamReasonBusy: '上一次入梦还没结束。',
     dreamReasonError: '调用模型失败。',
     dreamReasonParse: '模型输出无法解析。',
     statusDirty: '未保存',
@@ -128,7 +157,7 @@ const TXT = {
     refresh: 'Refresh',
     new: 'New',
     search: 'Search memories…',
-    empty: 'No memories yet. Create one here, or let the model call memory_save in a conversation.',
+    empty: 'No memories yet. Create one here, or turn on "Capture memories" to distill them from past sessions.',
     noResult: 'No matching memories.',
     mTitle: 'Title',
     mTags: 'Tags (comma separated)',
@@ -163,18 +192,48 @@ const TXT = {
     recallLimit: 'Max memories each time',
     recallMaxChars: 'Max characters each time',
     recallUnlimited: '0 = unlimited',
-    dreamSection: 'Memory dream',
+    captureSection: 'Capture memories',
+    captureDesc:
+      'When on, a model periodically reads this workspace\u2019s past sessions (including closed ones) and distills ' +
+      'facts worth keeping into memories. Each workspace is captured on its own. ' +
+      'You can also run /memorysave in the composer to capture once, right now.',
+    captureEnabled: 'Enable memory capture',
+    captureOffHint:
+      'Memory capture is off (you can still run /memorysave to capture once). Turn it on to pick a provider and model.',
+    captureNeedModel:
+      'Enabled, but no provider/model yet: automatic runs stay off. Run /memorysave to capture once with the current conversation model.',
+    captureInterval: 'Interval',
+    captureMaxSessions: 'Max sessions',
+    captureMaxMessages: 'Messages per session',
+    captureMaxChars: 'Transcript limit',
+    runCapture: 'Capture now',
+    capturing: 'Capturing…',
+    captureCreated: 'created',
+    captureUpdated: 'updated',
+    lastCapture: 'Last capture',
+    neverCapture: 'Never',
+    captureLog: 'Capture log',
+    captureReasonDisabled: 'Memory capture is off.',
+    captureReasonModel: 'No provider or model configured (run /memorysave to use the current conversation model).',
+    captureReasonBusy: 'The previous capture is still running.',
+    captureReasonNoSessions: 'The session-history service is unavailable, so past sessions cannot be read.',
+    captureReasonNoWorkspaces: 'No known workspace.',
+    captureReasonError: 'The model call failed.',
+    captureReasonParse: 'The model output could not be parsed.',
+    captureCmdLabel: 'Capture memories',
+    captureCmdDesc: 'Capture memories once, right now (same as /memorysave)',
+    providerLabel: 'Provider',
+    modelLabel: 'Model',
+    dreamSection: 'Dream',
     dreamDesc:
-      'When on, a model periodically tidies, merges and updates memories in the background, like sleep-time consolidation. ' +
-      'You can also run /memoryup in the composer to tidy once, right now.',
-    cmdLabel: 'Tidy memories',
-    cmdDesc: 'Tidy memories once, right now (same as /memoryup)',
-    dreamEnabled: 'Enable memory dream',
-    dreamOffHint: 'Memory dream is off (you can still run /memoryup to tidy once). Turn it on to pick a provider and model.',
+      'When on, a model periodically merges, de-duplicates and rewrites existing memories, like sleep-time consolidation. ' +
+      'You can also run /memoryup in the composer to dream once, right now.',
+    cmdLabel: 'Dream',
+    cmdDesc: 'Dream once, right now (same as /memoryup)',
+    dreamEnabled: 'Enable dream',
+    dreamOffHint: 'Dream is off (you can still run /memoryup to dream once). Turn it on to pick a provider and model.',
     dreamNeedModel:
-      'Enabled, but no provider/model yet: automatic runs stay off. Run /memoryup to tidy once with the current conversation model.',
-    dreamProvider: 'Provider',
-    dreamModel: 'Model',
+      'Enabled, but no provider/model yet: automatic runs stay off. Run /memoryup to dream once with the current conversation model.',
     dreamInterval: 'Interval',
     dreamMin: 'Minimum memories',
     unitMinutes: 'min',
@@ -190,7 +249,7 @@ const TXT = {
     lastRun: 'Last dream',
     neverRun: 'Never',
     runLog: 'Dream log',
-    dreamReasonDisabled: 'Memory dream is off.',
+    dreamReasonDisabled: 'Dream is off.',
     dreamReasonModel: 'No provider or model configured (run /memoryup to use the current conversation model).',
     dreamReasonFew: 'Not enough memories yet, skipped.',
     dreamReasonBusy: 'The previous dream is still running.',
@@ -218,6 +277,7 @@ interface MemorySummary {
   pinned: boolean;
   preview: string;
   file: string;
+  workspace?: string;
 }
 
 /** 一条完整记忆。 */
@@ -236,6 +296,17 @@ interface WorkspaceRef {
 interface ConfigSnapshot {
   store: { dir: string; scope: 'workspace' | 'global' };
   recall: { enabled: boolean; limit: number; maxChars: number };
+  capture: {
+    enabled: boolean;
+    provider: string;
+    model: string;
+    intervalMinutes: number;
+    maxSessions: number;
+    maxMessages: number;
+    maxChars: number;
+    maxTokens: number;
+    prompt: string;
+  };
   evolve: {
     enabled: boolean;
     provider: string;
@@ -268,6 +339,17 @@ interface EvolveOutcome {
   log: string;
 }
 
+/** 整理记忆执行结果。 */
+interface CaptureOutcome {
+  ok: boolean;
+  reason?: string;
+  workspaces: number;
+  sessions: number;
+  created: number;
+  updated: number;
+  log: string;
+}
+
 /** 编辑器草稿。 */
 interface Draft {
   id?: string;
@@ -275,6 +357,7 @@ interface Draft {
   tags: string;
   body: string;
   pinned: boolean;
+  workspace?: string;
 }
 
 /** 空草稿。 */
@@ -282,6 +365,12 @@ const EMPTY_DRAFT: Draft = { title: '', tags: '', body: '', pinned: false };
 
 /** 单个配置项的保存状态（驱动行内状态点）。 */
 type ConfigState = 'dirty' | 'saving' | 'saved' | 'error';
+
+/** 取工作区路径的最后一段作为展示名。 */
+function workspaceLabel(workspace: string): string {
+  const parts = workspace.split(/[\\/]/).filter((part) => part.length > 0);
+  return parts[parts.length - 1] ?? workspace;
+}
 
 /** 把工作区路径拼进请求。 */
 function withWorkspace(path: string, workspace: string): string {
@@ -399,6 +488,28 @@ function dreamReasonText(t: (key: string) => string, reason: string | undefined)
   }
 }
 
+/** 整理记忆的跳过 / 失败原因码 → 本地化文案；未知码原样返回。 */
+function captureReasonText(t: (key: string) => string, reason: string | undefined): string {
+  switch (reason) {
+    case 'disabled':
+      return t('captureReasonDisabled');
+    case 'model_not_configured':
+      return t('captureReasonModel');
+    case 'busy':
+      return t('captureReasonBusy');
+    case 'no_sessions':
+      return t('captureReasonNoSessions');
+    case 'no_workspaces':
+      return t('captureReasonNoWorkspaces');
+    case 'llm_error':
+      return t('captureReasonError');
+    case 'unparsable':
+      return t('captureReasonParse');
+    default:
+      return reason ?? '';
+  }
+}
+
 /** 记忆管理页面组件。 */
 function MemoryPage(props: { t: (key: string) => string; root?: string }) {
   const t = props.t;
@@ -413,11 +524,14 @@ function MemoryPage(props: { t: (key: string) => string; root?: string }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [evolveOutcome, setEvolveOutcome] = useState<EvolveOutcome | null>(null);
+  const [captureOutcome, setCaptureOutcome] = useState<CaptureOutcome | null>(null);
   const [rootPath, setRootPath] = useState('');
   const [view, setView] = useState<'memory' | 'settings'>('memory');
   const [cfgStatus, setCfgStatus] = useState<Record<string, ConfigState>>({});
   const [lastRunAt, setLastRunAt] = useState('');
+  const [lastCaptureAt, setLastCaptureAt] = useState('');
   const [evolving, setEvolving] = useState(false);
+  const [capturing, setCapturing] = useState(false);
   /** 「记忆目录」输入框的本地值；空串表示沿用默认目录。 */
   const [pathDraft, setPathDraft] = useState('');
 
@@ -495,6 +609,7 @@ function MemoryPage(props: { t: (key: string) => string; root?: string }) {
           tags: record.tags.join(', '),
           body: record.body,
           pinned: record.pinned,
+          workspace: record.workspace,
         });
       } catch (error) {
         setMsg({ ok: false, text: t('loadFail') + message(error) });
@@ -580,7 +695,11 @@ function MemoryPage(props: { t: (key: string) => string; root?: string }) {
    * 避免自动保存把用户正在输入的值冲掉；每个字段独立上报保存状态。
    */
   const commit = useCallback(
-    async (key: string, section: 'store' | 'recall' | 'evolve', patch: Record<string, unknown>) => {
+    async (
+      key: string,
+      section: 'store' | 'recall' | 'capture' | 'evolve',
+      patch: Record<string, unknown>
+    ) => {
       setStatus(key, 'saving');
       try {
         const response = await fetch(`${API}/config`, {
@@ -597,6 +716,7 @@ function MemoryPage(props: { t: (key: string) => string; root?: string }) {
                 ...prev,
                 store: section === 'store' ? data.store : prev.store,
                 recall: section === 'recall' ? data.recall : prev.recall,
+                capture: section === 'capture' ? data.capture : prev.capture,
                 evolve: section === 'evolve' ? data.evolve : prev.evolve,
                 root: data.root,
               }
@@ -648,13 +768,39 @@ function MemoryPage(props: { t: (key: string) => string; root?: string }) {
     }
   }, [loadList, query, t, workspace]);
 
+  /** 立即整理一次记忆（读历史会话）。 */
+  const runCapture = useCallback(async () => {
+    setCapturing(true);
+    setCaptureOutcome(null);
+    setMsg(null);
+    try {
+      const response = await fetch(withWorkspace(`${API}/capture`, workspace), { method: 'POST' });
+      const data = (await response.json()) as CaptureOutcome;
+      setCaptureOutcome(data);
+      setLastCaptureAt(new Date().toLocaleTimeString());
+      await loadList(workspace, query);
+    } catch (error) {
+      setMsg({ ok: false, text: t('saveFail') + message(error) });
+    } finally {
+      setCapturing(false);
+    }
+  }, [loadList, query, t, workspace]);
+
   const availableModels = useMemo(
     () => providers.find((entry) => entry.provider === cfg?.evolve.provider)?.models ?? [],
     [providers, cfg?.evolve.provider]
   );
 
+  const availableCaptureModels = useMemo(
+    () => providers.find((entry) => entry.provider === cfg?.capture.provider)?.models ?? [],
+    [providers, cfg?.capture.provider]
+  );
+
   const evolveReady = cfg !== null && cfg.evolve.provider.length > 0 && cfg.evolve.model.length > 0;
   const evolveOff = cfg === null || !cfg.evolve.enabled;
+
+  const captureReady = cfg !== null && cfg.capture.provider.length > 0 && cfg.capture.model.length > 0;
+  const captureOff = cfg === null || !cfg.capture.enabled;
 
   /** 行内保存状态点；未改动时不占位。 */
   const dot = (key: string) => {
@@ -779,6 +925,11 @@ function MemoryPage(props: { t: (key: string) => string; root?: string }) {
                       {item.title}
                     </div>
                     <div className={css.itemMeta}>
+                      {item.workspace !== undefined ? (
+                        <span className={css.tag} title={item.workspace}>
+                          {workspaceLabel(item.workspace)}
+                        </span>
+                      ) : null}
                       {item.tags.slice(0, 4).map((tag) => (
                         <span key={tag} className={css.tag}>
                           {tag}
@@ -863,6 +1014,11 @@ function MemoryPage(props: { t: (key: string) => string; root?: string }) {
               ) : null}
               {draft.id !== undefined ? (
                 <span className={css.detailId}>id: {draft.id}</span>
+              ) : null}
+              {draft.workspace !== undefined ? (
+                <span className={css.detailId} title={draft.workspace}>
+                  {t('workspace')}: {workspaceLabel(draft.workspace)}
+                </span>
               ) : null}
             </div>
           </>
@@ -984,6 +1140,156 @@ function MemoryPage(props: { t: (key: string) => string; root?: string }) {
 
               <section className={css.card}>
                 <header className={css.cardHead}>
+                  <h3 className={css.cardTitle}>{t('captureSection')}</h3>
+                  <p className={css.cardDesc}>{t('captureDesc')}</p>
+                </header>
+                <div className={css.cardBody}>
+                  {row(
+                    t('captureEnabled'),
+                    <Switch
+                      label={t('captureEnabled')}
+                      checked={cfg.capture.enabled}
+                      onChange={(next) => {
+                        setCfg({ ...cfg, capture: { ...cfg.capture, enabled: next } });
+                        void commit('capture.enabled', 'capture', { capture: { enabled: next } });
+                      }}
+                    />,
+                    'capture.enabled',
+                    captureOff ? t('captureOffHint') : undefined
+                  )}
+                  {!captureOff && !captureReady ? <p className={css.offHint}>{t('captureNeedModel')}</p> : null}
+                  {row(
+                    t('providerLabel'),
+                    <select
+                      className={css.select}
+                      value={cfg.capture.provider}
+                      disabled={captureOff}
+                      onChange={(event) => {
+                        const provider = event.target.value;
+                        const first = providers.find((entry) => entry.provider === provider)?.models[0]?.id ?? '';
+                        setCfg({ ...cfg, capture: { ...cfg.capture, provider, model: first } });
+                        void commit('capture.provider', 'capture', { capture: { provider, model: first } });
+                      }}
+                    >
+                      <option value="">{t('providerPlaceholder')}</option>
+                      {providers.map((entry) => (
+                        <option key={entry.provider} value={entry.provider}>
+                          {entry.name || entry.provider}
+                        </option>
+                      ))}
+                    </select>,
+                    'capture.provider'
+                  )}
+                  {row(
+                    t('modelLabel'),
+                    <select
+                      className={css.select}
+                      value={cfg.capture.model}
+                      disabled={captureOff || cfg.capture.provider.length === 0}
+                      onChange={(event) => {
+                        const model = event.target.value;
+                        setCfg({ ...cfg, capture: { ...cfg.capture, model } });
+                        void commit('capture.model', 'capture', { capture: { model } });
+                      }}
+                    >
+                      <option value="">{t('modelPlaceholder')}</option>
+                      {availableCaptureModels.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.name || model.id}
+                        </option>
+                      ))}
+                      {cfg.capture.model.length > 0 && !availableCaptureModels.some((entry) => entry.id === cfg.capture.model) ? (
+                        <option value={cfg.capture.model}>{cfg.capture.model + t('custom')}</option>
+                      ) : null}
+                    </select>,
+                    'capture.model'
+                  )}
+                  {row(
+                    t('captureInterval'),
+                    <NumberField
+                      value={cfg.capture.intervalMinutes}
+                      min={1}
+                      max={1440}
+                      unit={t('unitMinutes')}
+                      disabled={captureOff}
+                      onDirty={() => setStatus('capture.interval', 'dirty')}
+                      onChange={(value) => setCfg({ ...cfg, capture: { ...cfg.capture, intervalMinutes: value } })}
+                      onCommit={(value) => void commit('capture.interval', 'capture', { capture: { intervalMinutes: value } })}
+                    />,
+                    'capture.interval'
+                  )}
+                  {row(
+                    t('captureMaxSessions'),
+                    <NumberField
+                      value={cfg.capture.maxSessions}
+                      min={1}
+                      unit={t('unitItems')}
+                      disabled={captureOff}
+                      onDirty={() => setStatus('capture.maxSessions', 'dirty')}
+                      onChange={(value) => setCfg({ ...cfg, capture: { ...cfg.capture, maxSessions: value } })}
+                      onCommit={(value) => void commit('capture.maxSessions', 'capture', { capture: { maxSessions: value } })}
+                    />,
+                    'capture.maxSessions'
+                  )}
+                  {row(
+                    t('captureMaxMessages'),
+                    <NumberField
+                      value={cfg.capture.maxMessages}
+                      min={1}
+                      unit={t('unitItems')}
+                      disabled={captureOff}
+                      onDirty={() => setStatus('capture.maxMessages', 'dirty')}
+                      onChange={(value) => setCfg({ ...cfg, capture: { ...cfg.capture, maxMessages: value } })}
+                      onCommit={(value) => void commit('capture.maxMessages', 'capture', { capture: { maxMessages: value } })}
+                    />,
+                    'capture.maxMessages'
+                  )}
+                  {row(
+                    t('captureMaxChars'),
+                    <NumberField
+                      value={cfg.capture.maxChars}
+                      min={0}
+                      unit={t('unitChars')}
+                      disabled={captureOff}
+                      onDirty={() => setStatus('capture.maxChars', 'dirty')}
+                      onChange={(value) => setCfg({ ...cfg, capture: { ...cfg.capture, maxChars: value } })}
+                      onCommit={(value) => void commit('capture.maxChars', 'capture', { capture: { maxChars: value } })}
+                    />,
+                    'capture.maxChars',
+                    t('recallUnlimited')
+                  )}
+                  <div className={css.cardActions}>
+                    <button
+                      type="button"
+                      className={`${css.btn} ${css.btnPrimary}`}
+                      onClick={() => void runCapture()}
+                      disabled={capturing || !captureReady}
+                      title={captureReady ? undefined : t('captureNeedModel')}
+                    >
+                      {capturing ? t('capturing') : t('runCapture')}
+                    </button>
+                    <span className={css.rowHint}>
+                      {`${t('lastCapture')}: ${lastCaptureAt.length > 0 ? lastCaptureAt : t('neverCapture')}`}
+                    </span>
+                    {captureOutcome !== null ? (
+                      <span className={captureOutcome.ok ? css.ok : css.err}>
+                        {captureOutcome.ok
+                          ? `${t('captureCreated')} ${captureOutcome.created} · ${t('captureUpdated')} ${captureOutcome.updated}`
+                          : captureReasonText(t, captureOutcome.reason)}
+                      </span>
+                    ) : null}
+                  </div>
+                  {captureOutcome !== null ? (
+                    <details>
+                      <summary className={css.summary}>{t('captureLog')}</summary>
+                      <pre className={css.pre}>{captureOutcome.log}</pre>
+                    </details>
+                  ) : null}
+                </div>
+              </section>
+
+              <section className={css.card}>
+                <header className={css.cardHead}>
                   <h3 className={css.cardTitle}>{t('dreamSection')}</h3>
                   <p className={css.cardDesc}>{t('dreamDesc')}</p>
                 </header>
@@ -1003,7 +1309,7 @@ function MemoryPage(props: { t: (key: string) => string; root?: string }) {
                   )}
                   {!evolveOff && !evolveReady ? <p className={css.offHint}>{t('dreamNeedModel')}</p> : null}
                   {row(
-                    t('dreamProvider'),
+                    t('providerLabel'),
                     <select
                       className={css.select}
                       value={cfg.evolve.provider}
@@ -1025,7 +1331,7 @@ function MemoryPage(props: { t: (key: string) => string; root?: string }) {
                     'evolve.provider'
                   )}
                   {row(
-                    t('dreamModel'),
+                    t('modelLabel'),
                     <select
                       className={css.select}
                       value={cfg.evolve.model}
@@ -1124,11 +1430,12 @@ function message(error: unknown): string {
 }
 
 /** 斜杠菜单里的中文入口名；贡献项的 `name` 就是用户键入的 token，所以直接用中文。 */
-const CMD_NAME = '记忆';
+const CMD_CAPTURE = '整理记忆';
+const CMD_DREAM = '入梦';
 
 /**
- * 注册 `/记忆` 客户端入口：`/` 菜单里显示中文标题 + 图标，点选后转发给宿主命令
- * `/memoryup` 执行。
+ * 注册 `/整理记忆` 与 `/入梦` 两个客户端入口：`/` 菜单里显示中文标题 + 图标，
+ * 点选后分别转发给宿主命令 `/memorysave` 与 `/memoryup`。
  *
  * 宿主侧的 `dsh-commands` 强制命令名为 `[a-z][a-z0-9_-]*` 且描述符没有 icon 字段，
  * 「中文 + 图标」只能由客户端 contribution（`ctx.commandUi`）提供。
@@ -1136,35 +1443,42 @@ const CMD_NAME = '记忆';
  * 结果以对话里的流程节点呈现，不额外弹提示。
  */
 function registerCommandEntry(ctx: Record<string, any>, t: (key: string) => string): void {
-  // `commandUi` 用 inject 延迟取用：服务可能晚于本插件装配，取不到就只是没有这条菜单项。
+  // `commandUi` 用 inject 延迟取用：服务可能晚于本插件装配，取不到就只是没有这些菜单项。
   ctx.inject?.(['commandUi'], (uiCtx: Record<string, any>) => {
     const commandUi = uiCtx.commandUi;
     if (!commandUi || typeof commandUi.register !== 'function') return;
-    /** 宿主 commands 的远程门面；同样可能是后装配的，每次现取。 */
-    const remoteCommands = (): any => uiCtx.get?.('remote.commands') ?? uiCtx['remote.commands'];
-    commandUi.register({
-      name: CMD_NAME,
-      label: () => t('cmdLabel'),
-      description: () => t('cmdDesc'),
-      icon: <DreamAdminIcon size={16} />,
-      available: () => remoteCommands() !== undefined,
-      ui: {
-        kind: 'action',
-        run: (session: { sessionId: string }) => {
-          void runMemoryUp(remoteCommands(), session.sessionId);
+    /** 宿主 commands 的远程门面（`ctx.remote.commands`）；可能是后装配的，每次现取。 */
+    const remoteCommands = (): any => uiCtx.remote?.commands;
+    /** 两类入口共用同一套注册形状，只有文案与转发的宿主命令不同。 */
+    const register = (name: string, labelKey: string, descKey: string, token: string): void => {
+      commandUi.register({
+        name,
+        label: () => t(labelKey),
+        description: () => t(descKey),
+        // 宿主菜单以 `jsx(item.icon, { size })` 渲染图标，这里必须传「组件」本身，
+        // 传已渲染的元素（<DreamAdminIcon/>）会被当成组件类型而整条菜单渲染失败。
+        icon: DreamAdminIcon,
+        available: () => remoteCommands() !== undefined,
+        ui: {
+          kind: 'action',
+          run: (session: { sessionId: string }) => {
+            void runHostCommand(remoteCommands(), session.sessionId, token);
+          }
         }
-      }
-    });
+      });
+    };
+    register(CMD_CAPTURE, 'captureCmdLabel', 'captureCmdDesc', '/memorysave');
+    register(CMD_DREAM, 'cmdLabel', 'cmdDesc', '/memoryup');
   });
 }
 
-/** 把 `/记忆` 转发成宿主命令 `/memoryup`；RPC 本身失败时只留控制台记录。 */
-async function runMemoryUp(remoteCommands: any, sessionId: string): Promise<void> {
+/** 把客户端入口转发成宿主命令；RPC 本身失败时只留控制台记录。 */
+async function runHostCommand(remoteCommands: any, sessionId: string, token: string): Promise<void> {
   try {
-    const result = await remoteCommands.execute(sessionId, '/memoryup', []);
+    const result = await remoteCommands.execute(sessionId, token, []);
     if (result?.ok !== true) throw new Error(result?.error?.message ?? 'command.execute failed');
   } catch (error) {
-    console.error('[dream-admin] /记忆 执行失败', error);
+    console.error(`[dream-admin] ${token} 执行失败`, error);
   }
 }
 

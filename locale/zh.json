@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "记忆管理",
-    "description": "随工作区存放的 Markdown 长期记忆，可选记忆梦境自动整理。"
+    "description": "随工作区存放的 Markdown 长期记忆，可定时从历史会话整理记忆、并入梦巩固。"
   }
 }
