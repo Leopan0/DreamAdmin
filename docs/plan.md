@@ -8,11 +8,13 @@
 - [x] 插件名：`dream-admin`
 - [x] 一句话目标：给 DSH 智能体提供「随工作区管理、用户可编辑、可选记忆梦境」的长期记忆。
 - [x] 能力面清单：
-  - 记忆库（Markdown + YAML frontmatter，工作区模式落点 `<工作区>/memory`）
-  - 系统提示召回（`systemPrompt.context()` 动态注入）
-  - 4 个模型工具（`memory_save` / `memory_search` / `memory_list` / `memory_forget`）
-  - 记忆管理页（与「插件管理」同级的顶级面板 `main` + `sidebar.panellist`）
+  - 记忆库（Markdown + YAML frontmatter；按工作区或仓库身份分组）
+  - 分层召回（`systemPrompt.context()` 动态注入「标题 + 标签 + 摘要」，正文按需 `memory_read`）
+  - 4 个模型工具（`memory_search` / `memory_read` / `memory_list` / `memory_forget`）
+  - 整理记忆（可开关、可选模型、按间隔读取历史会话提炼）
+  - 语义召回（可开关、可选模型、改写检索词后融合进关键词检索）
   - 记忆梦境（可开关、可选模型、按间隔调用）
+  - 记忆管理页（与「插件管理」同级的顶级面板 `main` + `sidebar.panellist`）
   - HTTP 接口（`/dream-admin/*`，供管理页与外部脚本消费）
 - [x] 目标 profile：web
 
@@ -67,8 +69,41 @@
     不可用，且「选一条记忆」本身就是一次明确的导航动作。
   - 「自进化」在界面统一改称**记忆梦境**；`evolve` 配置键保持不变，避免旧
     `config.json` 失效。
-  - `store.dir` 的绝对路径语义从「仅在 workspace 作用域生效」扩展为
-    「两种作用域都生效」，使设置页的「记忆目录」字段在 `global` 下也真正可用。
+  - （已废止）曾把 `store.dir` 的绝对路径语义扩展到两种作用域，并设有 `scope`
+    （workspace / global）与「记忆目录」输入框；后续判定「作用域」与「分组方式」
+    功能重复，**删除 `scope` 与 `dir`**，只保留 `store.groupBy`
+    （workspace / peer），记忆目录名固定为 `memory`。
+  - 召回改为**分层注入**：frontmatter 新增 `summary`（缺失时由正文首句推导），
+    系统提示只注入标题 / 标签 / 摘要；新增 `memory_read` 工具按需取正文，显著
+    节省每轮 token。`memory_save` 工具不再存在（写入由整理记忆 / 管理页 / 手工编辑完成）。
+  - 关键词检索由「子串匹配 + 固定加分」升级为 **BM25 + 中文二字滑窗分词**
+    （`scoreMemories`），「包管理」可命中「包管理器」。
+  - 新增按仓库身份分组的 **peer** 机制（`src/peers.ts`，只读 `.git/config`，含
+    worktree 的 `gitdir` → `commondir` 跟随）；`store.groupBy: peer` 时同一仓库的
+    多个 clone / worktree 共用一份记忆，frontmatter 记录 `workspace` 与 `peer`。
+  - 语义召回最初按「本机 embedding 端点 + 侧车向量索引」实现，后查明 **DSH 的
+    `llm` 服务只提供对话流式接口与模型目录，没有 embeddings 接口**，也不暴露
+    provider 的 base URL / 密钥，无法用模型下拉配置向量检索；改为与整理记忆 /
+    入梦一致的配置方式（开关 + 供应商 + 模型），引擎侧用所选模型**改写检索词**，
+    再按 `weight` 与 BM25 分数融合（`src/semantic.ts`）。
+  - （命令形态，最终定稿）命令三易其形，最终确定为**纯客户端中文命令**：
+    1. 最早用 `ctx.commandUi.register({ name: '整理记忆' | '入梦' })` 去「包裹」宿主命令。
+       核对 `dsh-client-ui-commands` 后确认是误用：`register` 用于客户端自有命令，包裹宿主
+       命令应使用 `decorate({ name, available, ui })`；且原实现直接调 `remote.commands.execute`
+       绕过了客户端的 `command/executed` 确认。
+    2. 改为完全移除客户端注册，只留 `src/commands.ts` 注册宿主命令 `/memorysave`、
+       `/memoryup`。功能正确，但 `/` 菜单里只有英文名，不满足「中文命令」需求。
+    3. **现在**：不注册任何宿主命令。`src/client/index.ts` 用 `ctx.commandUi` 贡献项注册
+       `/记忆`、`/入梦`（贡献项的 `name` 就是 token，按输入原文精确匹配，中文合法），
+       action 直接 `POST /dream-admin/capture` / `/dream-admin/evolve`，结果经
+       `sessions.scope(id)` → `conversation.input.for(actx).notify(level, text)` 显示
+       （`error` → toast，`info` → 输入框上方的行内提示）；`src/commands.ts` 删除。
+    依据：宿主命令名被 `dsh-commands` 的 `parseCommand` 硬编码为
+    `^[a-z][a-z0-9_-]*$`，中文根本写不进去；内置命令的中英文写法由
+    `dsh-client-ui-commands` 内硬编码的 `BUILTINS` / `TOKEN_ALIASES` 映射，第三方既无法
+    扩展别名，也无法隐藏宿主命令行列。因此「菜单里只有中文」只能靠不注册宿主命令实现。
+    代价（已与用户确认接受）：手动触发不再回退到当前对话模型（必须在设置里为「整理记忆」
+    「入梦」选好 provider/model）、结果不再渲染成宿主流程节点。
 
 ---
 
@@ -152,8 +187,11 @@ title: "..."
 tags: ["a", "b"]
 created: "..."
 updated: "..."
-source: "manual" | "tool" | "evolve"
+source: "manual" | "tool" | "auto" | "evolve" | "import"
 pinned: false
+workspace: "<工作区绝对路径，可选>"
+peer: "<工作区逻辑身份，可选>"
+summary: "<一句话摘要，可选；缺失时由正文首句推导>"
 ---
 正文（Markdown）
 ```
@@ -166,12 +204,11 @@ pinned: false
 - frontmatter 读写用最小自实现（不引第三方 YAML），所有值以 JSON 标量写出，
   因此中文 / 引号 / 冒号内容都能无损往返。
 
-目录解析优先级：显式工作区 → `global` 模式 → 最近活跃会话 cwd → 全局兜底。
-
-`store.dir` 既是「工作区内的子目录名」也是「绝对路径覆盖」：为绝对路径时直接用该
-目录，**两种作用域下都生效**（`global` 分支同样先看 `dir` 是否为绝对路径，
-见 `globalMemoryRoot(dir?)`）。设置页的「记忆目录」输入框写的就是这个字段，因此
-「跟随工作区」模式下也有默认目录，且用户随时可以改成固定路径。
+目录解析优先级：显式工作区 → 最近活跃会话 cwd → 全局兜底。命中工作区后按
+`store.groupBy` 决定落点：`workspace` → `<工作区>/memory`；`peer` →
+`<DSH_HOME>/dream-admin/peers/<peer>/memory`（同仓库多 clone / worktree 共用）。
+目录名固定为 `memory`，**不再提供 `scope` / `dir` 配置，也不再提供「记忆目录」
+输入框**（理由见上文决策变更记录）。
 
 配置的持久化：UI 改动写入 `<DSH_HOME>/dream-admin/config.json`，与工作区无关、
 全局一份；`cordis.patch.yml` 的 `config:` 只提供初始默认值。所有配置节声明为
@@ -213,10 +250,10 @@ pinned: false
 | 记忆不再左右分栏 | `view === 'memory'` 下按 `draft` 是否为空二选一渲染：列表页 / 详情页 |
 | 列表 → 详情二级导航 | 列表项点击调 `openMemory(id)` 置 `draft`；详情页头部「← 返回」置 `draft = null` |
 | 工作区选择器位置 | 只在列表页头部显示，避免编辑中途切工作区导致上下文漂移 |
-| 记忆目录移出记忆页 | 记忆页不再显示 `rootLine`；改为设置 → 存储卡片里的「记忆目录」行 |
-| 设置组织 | 页内页签（记忆 / 设置）+ 分组卡片（存储 / 召回 / 记忆梦境）+ 行式设置项 |
+| 记忆目录字段移除 | 「作用域 + 记忆目录」与「分组方式」功能重复，字段整体删除；存储卡片只剩分组方式与「当前生效」路径 |
+| 设置组织 | 页内页签（记忆 / 设置）+ 分组卡片（存储 / 召回 / 语义召回 / 整理记忆 / 记忆梦境）+ 行式设置项 |
 | 自进化 → 记忆梦境 | 仅改**用户可见文案**与 schema 描述；配置键仍是 `evolve.*`，旧 config.json 不受影响 |
-| 供应商 / 模型可编辑性 | 关闭时 `disabled`；开启后才可选，未选时卡片提示且运行按钮禁用 |
+| 供应商 / 模型可编辑性 | 整理记忆 / 语义召回 / 记忆梦境三处一致：关闭时 `disabled`；开启后才可选；已开启但未选模型时卡片给出提示（语义召回此时静默只用关键词） |
 | 保存反馈 | 行内状态点四态：dirty(琥珀) / saving(强调色脉冲) / saved(绿，1.6s 后清除) / error(红) |
 | 梦境结果码 | 服务端 reason 码在客户端映射为本地化文案，不再直接暴露 `too_many_memories` 这类枚举 |
 
@@ -224,11 +261,11 @@ pinned: false
 
 - `row()` / `dot()` 用**普通函数调用**而非 `<Component/>`，`NumberField` 与 `Switch`
   定义为**模块级组件**——否则每次 render 生成新组件身份，输入框会失焦。
-- 自动保存的 `commit()` 只把被改动的那一节（store / recall / evolve）用服务端回包
-  覆盖，其余分节保留本地编辑，避免保存回包冲掉用户正在输入的值。
-- `useCallback` 的依赖数组在 render 时立刻求值：被依赖的 `const`（如 `defaultDir`）
-  必须声明在 `useCallback` **之前**，否则触发 TDZ `ReferenceError` 让整页白屏
-  （2026-10-02 线上事故：`savePath` 依赖 `defaultDir` 但声明在其后）。
+- 自动保存的 `commit()` 只把被改动的那一节（store / recall / search / capture /
+  evolve）用服务端回包覆盖，其余分节保留本地编辑，避免保存回包冲掉用户正在输入的值。
+- `useCallback` 的依赖数组在 render 时立刻求值：被依赖的 `const`（例如当时的
+  `defaultDir`）必须声明在 `useCallback` **之前**，否则触发 TDZ `ReferenceError`
+  让整页白屏（2026-10-02 线上事故；该字段已随「记忆目录」一并移除，但规律不变）。
 - 视觉一律走宿主令牌：宿主改令牌名只让外观退化、不会让渲染失败；颜色 / 间距 /
   控件高度（32px）逐项照搬宿主设置页与插件管理页的既有写法，不引入自有色板。
 
@@ -246,12 +283,17 @@ pinned: false
 | `scripts/build-client.mjs` | client half → `lib/client.js`（CJS + ModuleLoader 包装 + `dsh-css` 模块） |
 | `scripts/gates/run.mjs` | 一致性门禁 |
 | `src/config.ts` | schemastery schema、解析、持久化 |
-| `src/paths.ts` | 记忆根目录解析、工作区发现 |
-| `src/store.ts` | 记忆库读写、前端 frontmatter 解析 |
-| `src/prompt.ts` | 系统提示召回注入 |
-| `src/tools.ts` | 4 个模型工具 |
+| `src/paths.ts` | 记忆根目录解析（含 peer 分组）、工作区发现 |
+| `src/peers.ts` | 工作区逻辑身份：读 `.git/config` 推导 peer（含 worktree 跟随） |
+| `src/store.ts` | 记忆库读写、frontmatter 解析、BM25 + 中文分词检索、分层召回文本渲染 |
+| `src/semantic.ts` | 语义召回引擎：用所选模型改写检索词并与关键词分数融合 |
+| `src/prompt.ts` | 系统提示分层召回注入 |
+| `src/tools.ts` | 4 个模型工具（search / read / list / forget） |
+| `src/capture.ts` | 整理记忆执行器：读历史会话提炼记忆 |
+| `src/sessions.ts` | 历史会话读取（`sessionQuery` 可选服务） |
 | `src/evolve.ts` | 记忆梦境执行器（配置键仍是 `evolve`） |
-| `src/routes.ts` | `/dream-admin/*` HTTP 接口 |
+| `src/llm.ts` | 模型调用公共件：路由形状、流式文本累积、JSON 抠取与数组收敛 |
+| `src/routes.ts` | `/dream-admin/*` HTTP 接口（也是 `/记忆`、`/入梦` 的执行入口） |
 | `src/index.ts` | cordis 插件入口 |
 | `src/css-modules.d.ts` | `*.module.css` 的 TS 声明 |
 | `src/client/index.ts` | 浏览器侧顶级「记忆管理」面板 |

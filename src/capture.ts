@@ -20,10 +20,12 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-llm';
 import type { ResolvedPluginConfig } from './config.js';
-import { extractJson, toStringArray, type ModelRoute } from './evolve.js';
+import { collectStreamText, extractJson, toStringArray, type ModelRoute } from './llm.js';
 import { listWorkspaces, type RootResolver } from './paths.js';
+import { resolvePeer } from './peers.js';
 import type { SessionDigest, SessionReader } from './sessions.js';
-import { listMemories, readMemory, writeMemory } from './store.js';
+import { listMemories, readMemory, truncate, writeMemory } from './store.js';
+import type { ProgressReporter } from './tasks.js';
 
 /** 一次整理记忆的结果。 */
 export interface CaptureOutcome {
@@ -36,7 +38,8 @@ export interface CaptureOutcome {
     | 'no_workspaces'
     | 'no_sessions'
     | 'llm_error'
-    | 'unparsable';
+    | 'unparsable'
+    | 'cancelled';
   /** 本次纳入整理的工作区数。 */
   workspaces: number;
   /** 参与整理的会话数（有新内容的）。 */
@@ -57,6 +60,8 @@ export interface CaptureRunOptions {
   workspace?: string;
   /** 未单独配置 provider / model 时使用的备用路由（通常是当前对话模型）。 */
   fallbackRoute?: ModelRoute;
+  /** 阶段进度上报：长任务注册表把它接到轮询接口上。 */
+  onProgress?: ProgressReporter;
 }
 
 /** 整理记忆执行器。 */
@@ -92,7 +97,7 @@ const MAX_MESSAGE_CHARS = 1500;
 const MAX_INDEX_MEMORIES = 120;
 
 /** 记忆索引里每条摘要的字符上限。 */
-const MAX_INDEX_PREVIEW_CHARS = 160;
+const MAX_INDEX_SUMMARY_CHARS = 160;
 
 /** 未执行时的结果。 */
 function skipped(reason: CaptureOutcome['reason'], log: string, route?: ModelRoute): CaptureOutcome {
@@ -139,6 +144,9 @@ export function createCapturer(ctx: Context, deps: CaptureDeps): Capturer {
         : listWorkspaces(deps.sessions()).map((entry) => entry.path);
     if (workspaces.length === 0) return skipped('no_workspaces', '没有已知工作区，无法整理记忆。', route);
 
+    /** 阶段进度上报（长任务 / 对话框命令共用）。 */
+    const report = options.onProgress;
+
     running = true;
     let created = 0;
     let updated = 0;
@@ -147,7 +155,9 @@ export function createCapturer(ctx: Context, deps: CaptureDeps): Capturer {
     const notes: string[] = [];
 
     try {
-      for (const workspace of workspaces) {
+      report?.({ phase: 'prepare', completed: 0, total: workspaces.length });
+      for (let index = 0; index < workspaces.length; index += 1) {
+        const workspace = workspaces[index];
         if (signal?.aborted) break;
 
         // 自动模式：每个工作区各自计时；首次发现的工作区从当前时刻起算。
@@ -159,6 +169,8 @@ export function createCapturer(ctx: Context, deps: CaptureDeps): Capturer {
           }
           if (Date.now() - prev < cfg.intervalMinutes * 60_000) continue;
         }
+
+        report?.({ phase: 'scan', completed: index, total: workspaces.length, workspace });
 
         const state = watermarks.get(workspace) ?? new Map<string, number>();
         let scan;
@@ -188,18 +200,19 @@ export function createCapturer(ctx: Context, deps: CaptureDeps): Capturer {
           buildTranscript(scan.digests, cfg.maxChars)
         ].join('\n');
 
+        report?.({ phase: 'model', completed: index, total: workspaces.length, workspace });
         let text = '';
         try {
-          for await (const chunk of ctx.llm.stream({
-            provider: route.provider,
-            model: route.model,
-            system: cfg.prompt,
-            messages: [{ role: 'user', content: [{ type: 'text', text: userText }] }],
-            maxTokens: cfg.maxTokens,
-            ...(signal === undefined ? {} : { signal })
-          })) {
-            if (chunk.type === 'text-delta') text += chunk.text;
-          }
+          text = await collectStreamText(
+            ctx.llm.stream({
+              provider: route.provider,
+              model: route.model,
+              system: cfg.prompt,
+              messages: [{ role: 'user', content: [{ type: 'text', text: userText }] }],
+              maxTokens: cfg.maxTokens,
+              ...(signal === undefined ? {} : { signal })
+            })
+          );
         } catch (error) {
           failures += 1;
           notes.push(`${workspace}：模型调用失败（${describe(error)}）`);
@@ -214,7 +227,8 @@ export function createCapturer(ctx: Context, deps: CaptureDeps): Capturer {
           continue;
         }
 
-        const applied = applyOps(root, workspace, ops);
+        report?.({ phase: 'apply', completed: index, total: workspaces.length, workspace });
+        const applied = applyOps(root, workspace, resolvePeer(workspace), ops);
         created += applied.created;
         updated += applied.updated;
         sessions += scan.digests.length;
@@ -227,7 +241,21 @@ export function createCapturer(ctx: Context, deps: CaptureDeps): Capturer {
         lastRunAt.set(workspace, Date.now());
       }
 
+      report?.({ phase: 'apply', completed: workspaces.length, total: workspaces.length });
       const log = notes.length === 0 ? '没有需要整理的新内容。' : notes.join('\n');
+      if (signal?.aborted) {
+        ctx.logger.info(`dream-admin: 整理记忆已取消 — ${log}`);
+        return {
+          ok: false,
+          reason: 'cancelled',
+          workspaces: workspaces.length,
+          sessions,
+          created,
+          updated,
+          route,
+          log
+        };
+      }
       if (failures === 0) {
         ctx.logger.info(`dream-admin: 整理记忆完成 — ${log}`);
       } else {
@@ -285,8 +313,8 @@ function buildMemoryIndex(root: string): string {
   if (summaries.length === 0) return '## 已有记忆索引\n\n（当前工作区还没有记忆）';
   const lines = summaries.map((entry) => {
     const tags = entry.tags.length > 0 ? `（${entry.tags.join(', ')}）` : '';
-    const preview = entry.preview.slice(0, MAX_INDEX_PREVIEW_CHARS);
-    return `- ${entry.id} — ${entry.title}${tags}：${preview}`;
+    const summary = entry.summary.slice(0, MAX_INDEX_SUMMARY_CHARS);
+    return `- ${entry.id} — ${entry.title}${tags}：${summary}`;
   });
   return `## 已有记忆索引\n\n${lines.join('\n')}`;
 }
@@ -299,7 +327,7 @@ function buildTranscript(digests: SessionDigest[], maxChars: number): string {
   for (const digest of digests) {
     const header = `### 会话 ${digest.id}（${new Date(digest.createdAt).toISOString()}）`;
     const body = digest.messages
-      .map((message) => `${message.role === 'user' ? '用户' : '助手'}：${clamp(message.text, MAX_MESSAGE_CHARS)}`)
+      .map((message) => `${message.role === 'user' ? '用户' : '助手'}：${truncate(message.text, MAX_MESSAGE_CHARS)}`)
       .join('\n');
     const block = `${header}\n${body}`;
     if (used > 0 && used + block.length > budget) break;
@@ -310,35 +338,43 @@ function buildTranscript(digests: SessionDigest[], maxChars: number): string {
 }
 
 /** 应用模型的 ops。返回新增 / 更新条数。 */
-function applyOps(root: string, workspace: string, ops: unknown[]): { created: number; updated: number } {
+function applyOps(
+  root: string,
+  workspace: string,
+  peer: string | undefined,
+  ops: unknown[]
+): { created: number; updated: number } {
   let created = 0;
   let updated = 0;
   for (const raw of ops.slice(0, MAX_OPS)) {
-    const op = raw as { op?: unknown; id?: unknown; title?: unknown; tags?: unknown; body?: unknown };
+    const op = raw as {
+      op?: unknown;
+      id?: unknown;
+      title?: unknown;
+      tags?: unknown;
+      summary?: unknown;
+      body?: unknown;
+    };
     const body = typeof op.body === 'string' ? op.body.trim() : '';
     if (body.length === 0) continue;
     const title = typeof op.title === 'string' ? op.title : undefined;
     const tags = toStringArray(op.tags);
+    const summary = typeof op.summary === 'string' ? op.summary : undefined;
 
     if (op.op === 'update') {
       const id = typeof op.id === 'string' ? op.id : '';
       if (readMemory(root, id) === undefined) continue;
-      writeMemory(root, { id, title, tags, body, source: 'auto' });
+      writeMemory(root, { id, title, tags, summary, body, source: 'auto' });
       updated += 1;
       continue;
     }
 
     if (op.op === 'create') {
-      writeMemory(root, { title, tags, body, source: 'auto', workspace });
+      writeMemory(root, { title, tags, summary, body, source: 'auto', workspace, peer });
       created += 1;
     }
   }
   return { created, updated };
-}
-
-/** 按字符数截断。 */
-function clamp(text: string, maxChars: number): string {
-  return text.length <= maxChars ? text : text.slice(0, maxChars) + '…';
 }
 
 /** 提取错误信息。 */

@@ -11,8 +11,15 @@
  *   GET    /dream-admin/memory          单条（?id=&workspace=）
  *   POST   /dream-admin/memory          新建 / 覆盖（body: {id?, workspace?, title, body, tags, pinned}）
  *   DELETE /dream-admin/memory          删除（?id=&workspace=）
- *   POST   /dream-admin/capture         立即整理一次记忆（读历史会话，可带 ?workspace=）
- *   POST   /dream-admin/evolve          立即入梦一次
+ *   POST   /dream-admin/capture         起一次「整理记忆」任务（可带 ?workspace=），立即返回任务 id
+ *   POST   /dream-admin/evolve          起一次「入梦」任务（可带 ?workspace=；省略则对所有已知工作区入梦）
+ *   GET    /dream-admin/evolve-history  入梦记录（?workspace=&limit=）
+ *   GET    /dream-admin/tasks           长任务快照（?id= 取单个，省略则返回最近的全部）
+ *   POST   /dream-admin/cancel          请求取消（?id= 取消某个任务；省略则取消全部在跑的任务）
+ *
+ * 「整理记忆」「入梦」都是长任务：POST 只登记并启动，随即返回 `{ taskId, task }`；
+ * 进度与终态由 `GET /tasks` 轮询，随时可用 `POST /cancel` 中断。这样管理页与
+ * 对话框命令走的是同一套状态。
  *
  * @module dream-admin/routes
  */
@@ -29,9 +36,12 @@ import {
   type ResolvedPluginConfig
 } from './config.js';
 import type { Capturer } from './capture.js';
-import type { Evolver } from './evolve.js';
-import { globalMemoryRoot, listWorkspaces, type RootResolver, type WorkspaceRef } from './paths.js';
-import { deleteMemory, listMemories, readMemory, searchMemories, writeMemory } from './store.js';
+import { listDreamRecords, type Evolver } from './evolve.js';
+import { globalMemoryRoot, isDefaultWorkspace, type RootResolver, type WorkspaceRef } from './paths.js';
+import { resolvePeer } from './peers.js';
+import type { SemanticEngine } from './semantic.js';
+import { deleteMemory, listMemories, readMemory, writeMemory } from './store.js';
+import type { TaskRegistry } from './tasks.js';
 
 /** 路由依赖面。 */
 export interface RouteDeps {
@@ -45,10 +55,16 @@ export interface RouteDeps {
   resolveRoot: RootResolver;
   /** 活着的会话列表（用于工作区发现）。 */
   sessions: () => unknown;
+  /** 面板用的工作区候选（DSH 工作区注册表优先，其次会话 cwd）。 */
+  listWorkspaces: () => WorkspaceRef[];
   /** 入梦执行器。 */
   evolver: Evolver;
   /** 整理记忆执行器。 */
   capturer: Capturer;
+  /** 语义检索引擎（关键词 + 可选模型扩写词融合）。 */
+  semantic: SemanticEngine;
+  /** 长任务注册表：承载「整理记忆」「入梦」的进度与取消。 */
+  tasks: TaskRegistry;
 }
 
 /** 注册全部 HTTP 路由。@returns 一次性释放全部路由的 disposer。 */
@@ -66,6 +82,9 @@ export function registerRoutes(ctx: Context, deps: RouteDeps): () => void {
           plugin: PLUGIN_NAME,
           store: cfg.store,
           recall: cfg.recall,
+          search: { ...cfg.search, prompt: undefined },
+          /** 语义召回当前是否已配置生效（开关 + 供应商 + 模型），供排查「语义没生效」。 */
+          semanticReady: deps.semantic.available(),
           capture: { ...cfg.capture, prompt: undefined },
           evolve: { ...cfg.evolve, prompt: undefined },
           root: resolveRoot(),
@@ -128,9 +147,15 @@ export function registerRoutes(ctx: Context, deps: RouteDeps): () => void {
       kind: 'exact',
       path: `/${PLUGIN_NAME}/workspaces`,
       handler: (_req, res) => {
-        const items: WorkspaceRef[] = listWorkspaces(deps.sessions());
+        const candidates = deps.listWorkspaces();
+        const items = candidates.map((entry) => ({
+          ...entry,
+          peer: resolvePeer(entry.path)
+        }));
         json(res, 200, {
           items,
+          // DSH 的默认工作区（目录名固定为 `default-workspace`）；找不到时为空串。
+          default: candidates.find((entry) => isDefaultWorkspace(entry.path))?.path ?? '',
           active: resolveRoot(),
           global: globalMemoryRoot()
         });
@@ -140,14 +165,21 @@ export function registerRoutes(ctx: Context, deps: RouteDeps): () => void {
     ctx.webServer.register({
       kind: 'exact',
       path: `/${PLUGIN_NAME}/memories`,
-      handler: (req, res) => {
+      handler: async (req, res) => {
         const url = new URL(req.url ?? '/', 'http://localhost');
         const workspace = optional(url.searchParams.get('workspace'));
         const query = optional(url.searchParams.get('q'));
         const limit = clampLimit(url.searchParams.get('limit'), 200);
         const root = resolveRoot(workspace);
-        const items = query !== undefined ? searchMemories(root, query, limit) : listMemories(root).slice(0, limit);
-        json(res, 200, { root, items });
+        try {
+          const items =
+            query !== undefined
+              ? await deps.semantic.search(root, query, limit)
+              : listMemories(root).slice(0, limit);
+          json(res, 200, { root, items });
+        } catch (error) {
+          json(res, 500, { error: message(error) });
+        }
       }
     }),
 
@@ -217,28 +249,88 @@ export function registerRoutes(ctx: Context, deps: RouteDeps): () => void {
     ctx.webServer.register({
       kind: 'exact',
       path: `/${PLUGIN_NAME}/capture`,
-      handler: async (req, res) => {
+      handler: (req, res) => {
         if (req.method !== 'POST') {
           json(res, 405, { error: 'method not allowed' });
           return;
         }
         const url = new URL(req.url ?? '/', 'http://localhost');
         const workspace = optional(url.searchParams.get('workspace'));
-        const outcome = await deps.capturer.run(true, { workspace });
-        json(res, outcome.ok ? 200 : 409, outcome);
+        const task = deps.tasks.start('capture', (report, signal) =>
+          deps.capturer.run(true, { workspace, onProgress: report }, signal)
+        );
+        json(res, 202, { ok: true, taskId: task.id, task });
       }
     }),
 
     ctx.webServer.register({
       kind: 'exact',
       path: `/${PLUGIN_NAME}/evolve`,
-      handler: async (req, res) => {
+      handler: (req, res) => {
         if (req.method !== 'POST') {
           json(res, 405, { error: 'method not allowed' });
           return;
         }
-        const outcome = await deps.evolver.run(true);
-        json(res, outcome.ok ? 200 : 409, outcome);
+        const url = new URL(req.url ?? '/', 'http://localhost');
+        const workspace = optional(url.searchParams.get('workspace'));
+        const task = deps.tasks.start('evolve', (report, signal) =>
+          deps.evolver.run(true, { workspace, onProgress: report }, signal)
+        );
+        json(res, 202, { ok: true, taskId: task.id, task });
+      }
+    }),
+
+    ctx.webServer.register({
+      kind: 'exact',
+      path: `/${PLUGIN_NAME}/tasks`,
+      handler: (req, res) => {
+        const url = new URL(req.url ?? '/', 'http://localhost');
+        const id = optional(url.searchParams.get('id'));
+        if (id === undefined) {
+          json(res, 200, { ok: true, items: deps.tasks.list() });
+          return;
+        }
+        const task = deps.tasks.get(id);
+        if (task === undefined) {
+          json(res, 404, { ok: false, error: 'task not found' });
+          return;
+        }
+        json(res, 200, { ok: true, task });
+      }
+    }),
+
+    ctx.webServer.register({
+      kind: 'exact',
+      path: `/${PLUGIN_NAME}/cancel`,
+      handler: (req, res) => {
+        if (req.method !== 'POST') {
+          json(res, 405, { error: 'method not allowed' });
+          return;
+        }
+        const url = new URL(req.url ?? '/', 'http://localhost');
+        const id = optional(url.searchParams.get('id'));
+        if (id !== undefined) {
+          json(res, 200, { ok: true, cancelled: deps.tasks.cancel(id) ? 1 : 0 });
+          return;
+        }
+        // 不带 id：取消全部在跑的任务（对话框 /取消 用）。
+        let cancelled = 0;
+        for (const task of deps.tasks.list()) {
+          if (task.status === 'running' && deps.tasks.cancel(task.id)) cancelled += 1;
+        }
+        json(res, 200, { ok: true, cancelled });
+      }
+    }),
+
+    ctx.webServer.register({
+      kind: 'exact',
+      path: `/${PLUGIN_NAME}/evolve-history`,
+      handler: (req, res) => {
+        const url = new URL(req.url ?? '/', 'http://localhost');
+        const workspace = optional(url.searchParams.get('workspace'));
+        const limit = clampLimit(url.searchParams.get('limit'), 100);
+        const root = resolveRoot(workspace);
+        json(res, 200, { root, items: listDreamRecords(root, limit) });
       }
     })
   ];
@@ -254,6 +346,7 @@ function configView(deps: RouteDeps, root: string) {
   return {
     store: cfg.store,
     recall: cfg.recall,
+    search: cfg.search,
     evolve: cfg.evolve,
     capture: cfg.capture,
     root,

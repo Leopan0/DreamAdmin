@@ -13,6 +13,8 @@
  *   source: "manual" | "tool" | "auto" | "evolve"
  *   pinned: false
  *   workspace: "<工作区绝对路径，可选>"
+ *   peer: "<工作区逻辑身份，可选>"
+ *   summary: "<一句话摘要，可选；缺失时由正文首句推导>"
  *   ---
  *   正文……
  *
@@ -38,10 +40,14 @@ export interface MemoryRecord {
   source: MemorySource;
   pinned: boolean;
   body: string;
+  /** 一句话摘要；分层召回只注入它，正文留给 `memory_read` 按需读取。 */
+  summary: string;
   /** 该记忆对应的绝对文件路径。 */
   file: string;
   /** 记忆归属的工作区绝对路径；空表示默认 / 全局。 */
   workspace?: string;
+  /** 工作区逻辑身份；同一仓库的多个 clone / worktree 共用。 */
+  peer?: string;
 }
 
 /** 列表用的轻量摘要（含正文预览）。 */
@@ -54,9 +60,13 @@ export interface MemorySummary {
   source: MemorySource;
   pinned: boolean;
   preview: string;
+  /** 一句话摘要（缺失时由正文首句推导）。 */
+  summary: string;
   file: string;
   /** 记忆归属的工作区绝对路径；空表示默认 / 全局。 */
   workspace?: string;
+  /** 工作区逻辑身份；同一仓库的多个 clone / worktree 共用。 */
+  peer?: string;
 }
 
 /** 新建 / 更新记忆的入参。 */
@@ -69,6 +79,10 @@ export interface MemoryWriteInput {
   source?: MemorySource;
   /** 归属工作区绝对路径；省略时沿用旧值。 */
   workspace?: string;
+  /** 工作区逻辑身份；省略时沿用旧值。 */
+  peer?: string;
+  /** 一句话摘要；省略时沿用旧值，仍没有则从正文首句推导。 */
+  summary?: string;
 }
 
 /** 合法的记忆 id：足够安全，可以直接当文件名。 */
@@ -76,6 +90,12 @@ const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 
 /** 正文预览长度（字符）。 */
 const PREVIEW_CHARS = 160;
+
+/** 摘要长度上限（字符）。 */
+const SUMMARY_CHARS = 160;
+
+/** 关键词检索时正文参与打分的字符上限，避免超长正文拖慢每次召回。 */
+const MAX_SEARCH_BODY_CHARS = 8000;
 
 /**
  * 解析结果缓存：key 是文件绝对路径，value 带 mtime 用于失效判断。
@@ -142,6 +162,7 @@ export function writeMemory(root: string, input: MemoryWriteInput): MemoryRecord
   const file = join(root, `${id}.md`);
   const existing = readMemoryFile(file);
 
+  const body = typeof input.body === 'string' ? input.body : (existing?.body ?? '');
   const record: MemoryRecord = {
     id,
     title: normalizeTitle(input.title, existing),
@@ -150,8 +171,10 @@ export function writeMemory(root: string, input: MemoryWriteInput): MemoryRecord
     updated: now,
     source: input.source ?? existing?.source ?? 'manual',
     pinned: input.pinned ?? existing?.pinned ?? false,
-    body: typeof input.body === 'string' ? input.body : (existing?.body ?? ''),
+    body,
+    summary: normalizeSummary(input.summary, existing, body),
     workspace: normalizeWorkspace(input.workspace, existing),
+    peer: normalizePeer(input.peer, existing),
     file
   };
 
@@ -175,57 +198,156 @@ export function deleteMemory(root: string, id: string): boolean {
 }
 
 /**
- * 关键词检索：对 title / tags / body 做大小写不敏感的多词命中打分。
- * 置顶条目获得固定加成，同分按 updated 倒序。
+ * 关键词打分：BM25 + 中英文分词。
+ *
+ * 中文按二字滑窗切分，因此「包管理」能命中「包管理器」这类部分词 / 词序变化，
+ * 比原来的子串匹配更接近语义召回；标题 / 标签 / 摘要 / 正文分别加权。
+ *
+ * @returns id → 分数；无命中时为空 Map。
  */
-export function searchMemories(root: string, query: string, limit: number): MemorySummary[] {
-  const terms = query
-    .toLowerCase()
-    .split(/\s+/)
-    .map((term) => term.trim())
-    .filter((term) => term.length > 0);
-  const all = listMemories(root);
-  if (terms.length === 0) return all.slice(0, limit);
+export function scoreMemories(root: string, query: string): Map<string, number> {
+  const queryTokens = unique(tokenize(query));
+  const scores = new Map<string, number>();
+  if (queryTokens.length === 0) return scores;
 
-  const scored: Array<{ score: number; summary: MemorySummary }> = [];
-  for (const summary of all) {
+  const docs: Array<{ id: string; fields: string[][]; length: number }> = [];
+  for (const summary of listMemories(root)) {
     const record = readMemoryFile(summary.file);
     if (record === undefined) continue;
-    const haystackTitle = record.title.toLowerCase();
-    const haystackTags = record.tags.join(' ').toLowerCase();
-    const haystackBody = record.body.toLowerCase();
-    let score = 0;
-    for (const term of terms) {
-      if (haystackTitle.includes(term)) score += 6;
-      if (haystackTags.includes(term)) score += 4;
-      if (haystackBody.includes(term)) score += 1;
-    }
-    if (score === 0) continue;
-    scored.push({ score: score + (summary.pinned ? 1 : 0), summary });
+    const fields = [
+      tokenize(record.title),
+      tokenize(record.tags.join(' ')),
+      tokenize(record.summary),
+      tokenize(record.body.slice(0, MAX_SEARCH_BODY_CHARS))
+    ];
+    docs.push({ id: record.id, fields, length: fields.reduce((sum, field) => sum + field.length, 0) });
   }
-  scored.sort((a, b) => (b.score - a.score) || b.summary.updated.localeCompare(a.summary.updated));
-  return scored.slice(0, limit).map((entry) => entry.summary);
+  if (docs.length === 0) return scores;
+
+  const weights = [4, 3, 2, 1];
+  const avgLength = docs.reduce((sum, doc) => sum + doc.length, 0) / docs.length || 1;
+  const documentFreq = new Map<string, number>();
+  for (const doc of docs) {
+    const seen = new Set<string>();
+    for (const field of doc.fields) {
+      for (const token of field) {
+        if (seen.has(token)) continue;
+        seen.add(token);
+        documentFreq.set(token, (documentFreq.get(token) ?? 0) + 1);
+      }
+    }
+  }
+
+  const k1 = 1.2;
+  const b = 0.75;
+  for (const doc of docs) {
+    let score = 0;
+    for (const token of queryTokens) {
+      const freq = documentFreq.get(token) ?? 0;
+      if (freq === 0) continue;
+      let weighted = 0;
+      for (let index = 0; index < doc.fields.length; index += 1) {
+        const tf = countOccurrences(doc.fields[index], token);
+        if (tf > 0) weighted += weights[index] * tf;
+      }
+      if (weighted === 0) continue;
+      const idf = Math.log(1 + (docs.length - freq + 0.5) / (freq + 0.5));
+      const norm = 1 - b + b * (doc.length / avgLength);
+      score += idf * ((weighted * (k1 + 1)) / (weighted + k1 * norm));
+    }
+    if (score > 0) scores.set(doc.id, score);
+  }
+  return scores;
 }
 
-/** 依据记忆生成一段注入系统提示的文本。 */
+/** 本地关键词检索：按 BM25 分数取前 limit 条；空查询返回最近的记忆。 */
+export function searchMemories(root: string, query: string, limit: number): MemorySummary[] {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) return listMemories(root).slice(0, limit);
+  const scores = scoreMemories(root, trimmed);
+  if (scores.size === 0) return [];
+  const byId = new Map(listMemories(root).map((summary) => [summary.id, summary]));
+  return [...scores.entries()]
+    .sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return (byId.get(b[0])?.updated ?? '').localeCompare(byId.get(a[0])?.updated ?? '');
+    })
+    .map(([id]) => byId.get(id))
+    .filter((summary): summary is MemorySummary => summary !== undefined)
+    .slice(0, limit);
+}
+
+/** 分词：拉丁词按非字母数字切分并拆开连接符；中日文按二字滑窗切分。 */
+function tokenize(text: string): string[] {
+  const lower = text.toLowerCase();
+  const tokens: string[] = [];
+  for (const word of lower.match(/[a-z0-9][a-z0-9_.#+-]*/g) ?? []) {
+    tokens.push(word);
+    for (const part of word.split(/[._#+-]+/)) {
+      if (part.length > 1 && part !== word) tokens.push(part);
+    }
+  }
+  for (const run of lower.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+/g) ?? []) {
+    if (run.length === 1) {
+      tokens.push(run);
+      continue;
+    }
+    for (let index = 0; index + 1 < run.length; index += 1) tokens.push(run.slice(index, index + 2));
+  }
+  return tokens;
+}
+
+/** 统计 token 在数组里出现的次数。 */
+function countOccurrences(tokens: string[], target: string): number {
+  let count = 0;
+  for (const token of tokens) if (token === target) count += 1;
+  return count;
+}
+
+/** 去重，保持首次出现的顺序。 */
+function unique(tokens: string[]): string[] {
+  return [...new Set(tokens)];
+}
+
+/**
+ * 依据记忆生成一段注入系统提示的文本。
+ *
+ * 分层注入：只给标题 / 标签 / 摘要（每条约几十 token），正文留在记忆库里，
+ * 由模型用 `memory_read` 按需读取，避免把整段正文塞进每个模型轮次。
+ */
 export function renderRecall(records: MemoryRecord[], maxChars: number): string {
   if (records.length === 0) return '';
   const lines: string[] = [
     '## 长期记忆（DreamAdmin）',
     '',
-    '以下条目来自当前工作区的长期记忆库，是此前会话沉淀下来的事实与偏好，优先于你的先验假设。',
-    '如需更精确的内容，用 `memory_search` 工具检索。',
+    '以下条目来自长期记忆库，是此前会话沉淀下来的事实与偏好，优先于你的先验假设。',
+    '这里只给摘要；需要正文时用 `memory_read` 按 id 读取，或先 `memory_search` 检索。',
     ''
   ];
   for (const record of records) {
     const flags = record.pinned ? ' [置顶]' : '';
     const tags = record.tags.length > 0 ? `（${record.tags.join(', ')}）` : '';
-    lines.push(`- **${record.title}**${tags}${flags} — id: \`${record.id}\``);
-    const body = record.body.trim();
-    if (body.length > 0) lines.push(indent(truncate(body, 600)));
+    lines.push(`- **${record.title}**${tags}${flags} — id: \`${record.id}\`${scopeSuffix(record)}`);
+    const summary = record.summary.trim() || deriveSummary(record.body);
+    if (summary.length > 0) lines.push(indent(summary));
     lines.push('');
   }
   return truncate(lines.join('\n'), maxChars);
+}
+
+/** 归属提示：优先显示工作区末段名，其次显示 peer。 */
+function scopeSuffix(record: MemoryRecord): string {
+  if (record.workspace !== undefined && record.workspace.length > 0) {
+    return ` — 工作区: ${lastSegment(record.workspace)}`;
+  }
+  if (record.peer !== undefined && record.peer.length > 0) return ` — 工作区: ${record.peer}`;
+  return '';
+}
+
+/** 取路径最后一段作为展示名。 */
+function lastSegment(value: string): string {
+  const parts = value.split(/[\\/]/).filter((part) => part.length > 0);
+  return parts[parts.length - 1] ?? value;
 }
 
 /** 取摘要。 */
@@ -239,8 +361,10 @@ function toSummary(record: MemoryRecord): MemorySummary {
     source: record.source,
     pinned: record.pinned,
     preview: truncate(record.body.replace(/\s+/g, ' ').trim(), PREVIEW_CHARS),
+    summary: record.summary,
     file: record.file,
-    workspace: record.workspace
+    workspace: record.workspace,
+    peer: record.peer
   };
 }
 
@@ -278,8 +402,10 @@ function readMemoryFile(file: string): MemoryRecord | undefined {
     source: sourceValue(meta.source),
     pinned: meta.pinned === true,
     body,
+    summary: stringValue(meta.summary) ?? deriveSummary(body),
     file,
-    workspace: stringValue(meta.workspace)
+    workspace: stringValue(meta.workspace),
+    peer: stringValue(meta.peer)
   };
   cache.set(file, { mtimeMs, record });
   return record;
@@ -319,6 +445,44 @@ function normalizeWorkspace(
 ): string | undefined {
   if (typeof workspace === 'string' && workspace.trim().length > 0) return workspace.trim();
   return existing?.workspace;
+}
+
+/** 归一化 peer：显式给了就用（去空），否则沿用旧值。 */
+function normalizePeer(peer: string | undefined, existing: MemoryRecord | undefined): string | undefined {
+  if (typeof peer === 'string' && peer.trim().length > 0) return peer.trim();
+  return existing?.peer;
+}
+
+/** 归一化摘要：显式给了就用；正文没变则沿用旧摘要；否则从正文首句推导。 */
+function normalizeSummary(
+  summary: string | undefined,
+  existing: MemoryRecord | undefined,
+  body: string
+): string {
+  if (typeof summary === 'string' && summary.trim().length > 0) {
+    return truncate(summary.replace(/\s+/g, ' ').trim(), SUMMARY_CHARS);
+  }
+  if (existing !== undefined && existing.body === body && existing.summary.length > 0) return existing.summary;
+  const derived = deriveSummary(body);
+  return derived.length > 0 ? derived : (existing?.summary ?? '');
+}
+
+/**
+ * 从正文里提取一句话摘要：去掉代码块与 Markdown 记号，取首句，超长截断。
+ * 这是「模型没有生成 summary」时的零成本兜底。
+ */
+export function deriveSummary(body: string, maxChars = SUMMARY_CHARS): string {
+  const text = body
+    .replace(/```[\s\S]*?```/g, ' ')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:[#>*+-]|\d+\.)\s*/, '').trim())
+    .filter((line) => line.length > 0)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.length === 0) return '';
+  const sentence = text.match(/^[\s\S]*?[。！？!?；;.]/)?.[0] ?? text;
+  return truncate(sentence.trim(), maxChars);
 }
 
 /** 把 meta 里可能出现的枚举值收敛到 MemorySource。 */
@@ -412,7 +576,9 @@ function serializeDocument(record: MemoryRecord): string {
     `updated: ${JSON.stringify(record.updated)}`,
     `source: ${JSON.stringify(record.source)}`,
     `pinned: ${record.pinned ? 'true' : 'false'}`,
-    ...(record.workspace === undefined ? [] : [`workspace: ${JSON.stringify(record.workspace)}`])
+    ...(record.workspace === undefined ? [] : [`workspace: ${JSON.stringify(record.workspace)}`]),
+    ...(record.peer === undefined ? [] : [`peer: ${JSON.stringify(record.peer)}`]),
+    ...(record.summary.length === 0 ? [] : [`summary: ${JSON.stringify(record.summary)}`])
   ].join('\n');
   const body = record.body.endsWith('\n') ? record.body : record.body + '\n';
   return `---\n${meta}\n---\n${body}`;

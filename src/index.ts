@@ -7,13 +7,15 @@
  *      工作区模式下落点是 `<工作区>/memory`，没有工作区时回落
  *      `<DSH_HOME>/dream-admin/memory`。用户可以用任何编辑器直接改。
  *   2. 召回：`ctx.systemPrompt.context()` 注册动态 context，每个模型轮次把
- *      「置顶 + 最近更新」的记忆注入系统提示。
- *   3. 工具：`memory_search` / `memory_list` / `memory_forget`。
+ *      「置顶 + 最近更新」的记忆**摘要**注入系统提示（分层注入省 token），正文由
+ *      `memory_read` 按需读取。
+ *   3. 工具：`memory_search`（BM25 关键词 + 可选模型改写融合）/ `memory_read` /
+ *      `memory_list` / `memory_forget`。
  *   4. 整理记忆（可开关）：按间隔读取各工作区的历史会话（含已关闭的会话），
  *      调用用户指定的模型提炼出值得长期记住的事实并写入记忆库；也可以在对话框
- *      输入 `/memorysave` 立即整理一次。
+ *      输入 `/记忆` 立即整理一次（见 client/index.ts，直接调用本插件的 HTTP 接口）。
  *   5. 入梦（可开关）：按间隔调用用户指定的模型，对已有记忆做合并 / 去重 / 提炼；
- *      也可以在对话框输入 `/memoryup` 立即入梦一次。
+ *      也可以在对话框输入 `/入梦` 立即入梦一次。
  *
  * 另有一组 `GET/POST /dream-admin/*` 路由，供浏览器侧的「记忆管理」页面（与
  * 插件管理同级的顶级面板）读写记忆与配置。
@@ -40,11 +42,18 @@ import {
 } from './config.js';
 import { createCapturer } from './capture.js';
 import { createEvolver } from './evolve.js';
-import { registerMemoryCommand } from './commands.js';
-import { createRootResolver } from './paths.js';
+import {
+  createRootResolver,
+  listWorkspaces,
+  registryWorkspaces,
+  type WorkspaceRef,
+  type WorkspaceRegistryLike
+} from './paths.js';
 import { installRecall } from './prompt.js';
 import { registerRoutes } from './routes.js';
+import { createSemanticEngine } from './semantic.js';
 import { createSessionReader } from './sessions.js';
+import { createTaskRegistry } from './tasks.js';
 import { registerMemoryTools } from './tools.js';
 
 export { Config, PLUGIN_NAME, resolvePluginConfig } from './config.js';
@@ -81,6 +90,7 @@ export function apply(ctx: Context, config: PluginConfig): void {
       {
         store: sectionValue(config.store),
         recall: sectionValue(config.recall),
+        search: sectionValue(config.search),
         evolve: sectionValue(config.evolve),
         capture: sectionValue(config.capture)
       },
@@ -99,16 +109,39 @@ export function apply(ctx: Context, config: PluginConfig): void {
   };
 
   const resolveRoot = createRootResolver({
-    store: () => resolved().store,
+    groupBy: () => resolved().store.groupBy,
     sessions: () => ctx.sessions.list()
   });
+
+  // DSH 工作区注册表（`ctx.workspaceRegistry`）：宿主侧可选能力。它是「面板里列出
+  // DSH 展示的所有工作区」的真源，按目录持久记录，不依赖会话是否还活着；没挂时回退
+  // 到按会话 cwd 发现，行为与以前一致。
+  let workspaceRegistry: WorkspaceRegistryLike | undefined;
+  ctx.inject(['workspaceRegistry'], (serviceCtx) => {
+    workspaceRegistry = (serviceCtx as Context & { workspaceRegistry?: WorkspaceRegistryLike })
+      .workspaceRegistry;
+    serviceCtx.effect(
+      () => () => {
+        workspaceRegistry = undefined;
+      },
+      'dream-admin: workspaceRegistry 绑定'
+    );
+  });
+
+  /** 面板用的工作区候选：优先 DSH 注册表，其次会话 cwd。 */
+  const listWorkspaceCandidates = (): WorkspaceRef[] => {
+    const fromRegistry = workspaceRegistry === undefined ? [] : registryWorkspaces(workspaceRegistry);
+    return fromRegistry.length > 0 ? fromRegistry : listWorkspaces(ctx.sessions.list());
+  };
 
   const applyOverride = (patch: Partial<PluginConfigInput>): Partial<PluginConfigInput> => {
     runtimeOverride = mergeConfig(runtimeOverride ?? {}, patch);
     return runtimeOverride;
   };
 
-  const evolver = createEvolver(ctx, { resolved, resolveRoot });
+  const semantic = createSemanticEngine({ resolved: () => resolved().search, llm: ctx.llm });
+
+  const evolver = createEvolver(ctx, { resolved, resolveRoot, sessions: () => ctx.sessions.list() });
   const sessionReader = createSessionReader(ctx);
   const capturer = createCapturer(ctx, {
     resolved,
@@ -117,19 +150,24 @@ export function apply(ctx: Context, config: PluginConfig): void {
     sessionReader
   });
 
+  // 长任务注册表：让「整理记忆」「入梦」的执行从「一个同步请求」变成
+  // 「可轮询进度、可中断的任务」，管理页与对话框命令共用。
+  const tasks = createTaskRegistry();
+
   const disposeRoutes = registerRoutes(ctx, {
     resolved,
     currentOverride: () => runtimeOverride ?? {},
     applyOverride,
     resolveRoot,
     sessions: () => ctx.sessions.list(),
+    listWorkspaces: listWorkspaceCandidates,
     evolver,
-    capturer
+    capturer,
+    semantic,
+    tasks
   });
 
-  const disposeTools = registerMemoryTools(ctx, { resolved, resolveRoot });
-
-  const disposeCommand = registerMemoryCommand(ctx, { evolver, capturer });
+  const disposeTools = registerMemoryTools(ctx, { resolved, resolveRoot, semantic });
 
   const disposeRecall = installRecall(ctx, {
     resolved,
@@ -141,19 +179,22 @@ export function apply(ctx: Context, config: PluginConfig): void {
     () => () => {
       disposeRoutes();
       disposeTools();
-      disposeCommand();
       disposeRecall();
+      // 先取消在跑的长任务，再停各自的定时器。
+      tasks.dispose();
       evolver.dispose();
       capturer.dispose();
+      semantic.dispose();
       sessionReader.dispose();
     },
-    'dream-admin: 路由 / 工具 / 命令 / 召回 / 整理记忆 / 入梦 生命周期'
+    'dream-admin: 路由 / 工具 / 召回 / 整理记忆 / 入梦 生命周期'
   );
 
   const cfg = resolved();
   ctx.logger.info(
-    `dream-admin 已加载（作用域: ${cfg.store.scope}，目录: ${cfg.store.dir}，` +
+    `dream-admin 已加载（分组: ${cfg.store.groupBy}，` +
     `召回: ${cfg.recall.enabled ? `开(${cfg.recall.limit})` : '关'}，` +
+    `语义检索: ${cfg.search.semantic ? `开(${cfg.search.provider}/${cfg.search.model})` : '关'}，` +
     `整理记忆: ${cfg.capture.enabled ? `开(${cfg.capture.provider}/${cfg.capture.model})` : '关'}，` +
     `入梦: ${cfg.evolve.enabled ? `开(${cfg.evolve.provider}/${cfg.evolve.model})` : '关'}，` +
     `当前记忆根: ${resolveRoot()}）`

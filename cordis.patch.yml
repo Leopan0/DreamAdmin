@@ -20,12 +20,16 @@
       name: dream-admin
       config:
         store:
-          dir: memory
-          scope: workspace
+          groupBy: workspace
         recall:
           enabled: true
           limit: 5
           maxChars: 4000
+        search:
+          semantic: false
+          provider: ''
+          model: ''
+          weight: 0.35
         capture:
           enabled: false
           provider: ''

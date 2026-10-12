@@ -15,19 +15,22 @@
  * @module dream-admin/config
  */
 import z from '@deepseek-ai/schemastery';
-/**
- * 稳定插件 id：cordis 插件名、npm 包名、bundle patch id、HTTP 路由前缀、
+/** 稳定插件 id：cordis 插件名、npm 包名、bundle patch id、HTTP 路由前缀、
  * client ModuleLoader id —— 按合同全部相同。
  */
 export declare const PLUGIN_NAME = "dream-admin";
-/** 工作区内的默认记忆目录名（相对工作区根）。 */
-export declare const DEFAULT_MEMORY_DIR = "memory";
 /** 默认每次注入系统提示的记忆条数。 */
 export declare const DEFAULT_RECALL_LIMIT = 5;
 /** 默认注入系统提示的记忆文本上限（字符）。 */
 export declare const DEFAULT_RECALL_MAX_CHARS = 4000;
-/** 默认记忆梦境间隔（分钟）。 */
-export declare const DEFAULT_EVOLVE_INTERVAL_MINUTES = 30;
+/** 扩写词分数在语义召回融合里的默认权重（0..1）。 */
+export declare const DEFAULT_SEMANTIC_WEIGHT = 0.35;
+/** 单次语义扩写调用的输出上限（token）。 */
+export declare const DEFAULT_SEMANTIC_MAX_TOKENS = 256;
+/** 语义召回的扩写提示：把检索词扩写成同义 / 近义 / 中英文相关词。 */
+export declare const DEFAULT_SEMANTIC_PROMPT: string;
+/** 默认记忆梦境的夜间整理时刻（24 小时制，0-23）。 */
+export declare const DEFAULT_EVOLVE_AT_HOUR = 3;
 /** 默认记忆梦境所需的记忆条数下限。 */
 export declare const DEFAULT_EVOLVE_MIN_MEMORIES = 3;
 /** 单次记忆梦境调用的输出上限（token）。 */
@@ -51,11 +54,9 @@ export declare const DEFAULT_CAPTURE_PROMPT: string;
  */
 declare const Config: z<Schemastery.ObjectS<NoInfer<{
     store: z<NoInfer<Schemastery.ObjectS<NoInfer<{
-        dir: z<string, string, "defined">;
-        scope: z<"workspace" | "global", "workspace" | "global", "defined">;
+        groupBy: z<"workspace" | "peer", "workspace" | "peer", "defined">;
     }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
-        dir: z<string, string, "defined">;
-        scope: z<"workspace" | "global", "workspace" | "global", "defined">;
+        groupBy: z<"workspace" | "peer", "workspace" | "peer", "defined">;
     }>>>, "volatile-defined">;
     recall: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         enabled: z<boolean, boolean, "defined">;
@@ -66,11 +67,26 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
         limit: z<number, number, "defined">;
         maxChars: z<number, number, "defined">;
     }>>>, "volatile-defined">;
+    search: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+        semantic: z<boolean, boolean, "defined">;
+        provider: z<string, string, "defined">;
+        model: z<string, string, "defined">;
+        weight: z<number, number, "defined">;
+        maxTokens: z<number, number, "defined">;
+        prompt: z<string, string, "defined">;
+    }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+        semantic: z<boolean, boolean, "defined">;
+        provider: z<string, string, "defined">;
+        model: z<string, string, "defined">;
+        weight: z<number, number, "defined">;
+        maxTokens: z<number, number, "defined">;
+        prompt: z<string, string, "defined">;
+    }>>>, "volatile-defined">;
     evolve: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         enabled: z<boolean, boolean, "defined">;
         provider: z<string, string, "defined">;
         model: z<string, string, "defined">;
-        intervalMinutes: z<number, number, "defined">;
+        atHour: z<number, number, "defined">;
         minMemories: z<number, number, "defined">;
         maxTokens: z<number, number, "defined">;
         prompt: z<string, string, "defined">;
@@ -78,7 +94,7 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
         enabled: z<boolean, boolean, "defined">;
         provider: z<string, string, "defined">;
         model: z<string, string, "defined">;
-        intervalMinutes: z<number, number, "defined">;
+        atHour: z<number, number, "defined">;
         minMemories: z<number, number, "defined">;
         maxTokens: z<number, number, "defined">;
         prompt: z<string, string, "defined">;
@@ -106,11 +122,9 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
     }>>>, "volatile-defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
     store: z<NoInfer<Schemastery.ObjectS<NoInfer<{
-        dir: z<string, string, "defined">;
-        scope: z<"workspace" | "global", "workspace" | "global", "defined">;
+        groupBy: z<"workspace" | "peer", "workspace" | "peer", "defined">;
     }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
-        dir: z<string, string, "defined">;
-        scope: z<"workspace" | "global", "workspace" | "global", "defined">;
+        groupBy: z<"workspace" | "peer", "workspace" | "peer", "defined">;
     }>>>, "volatile-defined">;
     recall: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         enabled: z<boolean, boolean, "defined">;
@@ -121,11 +135,26 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
         limit: z<number, number, "defined">;
         maxChars: z<number, number, "defined">;
     }>>>, "volatile-defined">;
+    search: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+        semantic: z<boolean, boolean, "defined">;
+        provider: z<string, string, "defined">;
+        model: z<string, string, "defined">;
+        weight: z<number, number, "defined">;
+        maxTokens: z<number, number, "defined">;
+        prompt: z<string, string, "defined">;
+    }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+        semantic: z<boolean, boolean, "defined">;
+        provider: z<string, string, "defined">;
+        model: z<string, string, "defined">;
+        weight: z<number, number, "defined">;
+        maxTokens: z<number, number, "defined">;
+        prompt: z<string, string, "defined">;
+    }>>>, "volatile-defined">;
     evolve: z<NoInfer<Schemastery.ObjectS<NoInfer<{
         enabled: z<boolean, boolean, "defined">;
         provider: z<string, string, "defined">;
         model: z<string, string, "defined">;
-        intervalMinutes: z<number, number, "defined">;
+        atHour: z<number, number, "defined">;
         minMemories: z<number, number, "defined">;
         maxTokens: z<number, number, "defined">;
         prompt: z<string, string, "defined">;
@@ -133,7 +162,7 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
         enabled: z<boolean, boolean, "defined">;
         provider: z<string, string, "defined">;
         model: z<string, string, "defined">;
-        intervalMinutes: z<number, number, "defined">;
+        atHour: z<number, number, "defined">;
         minMemories: z<number, number, "defined">;
         maxTokens: z<number, number, "defined">;
         prompt: z<string, string, "defined">;
@@ -172,8 +201,7 @@ export type PluginConfigInput = {
 };
 /** 解析后的存储策略。 */
 export interface ResolvedStoreConfig {
-    readonly dir: string;
-    readonly scope: 'workspace' | 'global';
+    readonly groupBy: 'workspace' | 'peer';
 }
 /** 解析后的召回策略。 */
 export interface ResolvedRecallConfig {
@@ -181,12 +209,21 @@ export interface ResolvedRecallConfig {
     readonly limit: number;
     readonly maxChars: number;
 }
+/** 解析后的检索策略。 */
+export interface ResolvedSearchConfig {
+    readonly semantic: boolean;
+    readonly provider: string;
+    readonly model: string;
+    readonly weight: number;
+    readonly maxTokens: number;
+    readonly prompt: string;
+}
 /** 解析后的记忆梦境策略。 */
 export interface ResolvedEvolveConfig {
     readonly enabled: boolean;
     readonly provider: string;
     readonly model: string;
-    readonly intervalMinutes: number;
+    readonly atHour: number;
     readonly minMemories: number;
     readonly maxTokens: number;
     readonly prompt: string;
@@ -207,6 +244,7 @@ export interface ResolvedCaptureConfig {
 export interface ResolvedPluginConfig {
     readonly store: ResolvedStoreConfig;
     readonly recall: ResolvedRecallConfig;
+    readonly search: ResolvedSearchConfig;
     readonly evolve: ResolvedEvolveConfig;
     readonly capture: ResolvedCaptureConfig;
 }

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "DreamAdmin",
-    "description": "Workspace-scoped Markdown long-term memory, with scheduled capture from past sessions and a dream consolidation loop."
+    "description": "Markdown long-term memory grouped per workspace or repository, with layered recall, optional session capture, semantic recall and dream consolidation."
   }
 }

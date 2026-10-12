@@ -19,14 +19,15 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { ResolvedPluginConfig } from './config.js';
-import { type ModelRoute } from './evolve.js';
+import { type ModelRoute } from './llm.js';
 import { type RootResolver } from './paths.js';
 import type { SessionReader } from './sessions.js';
+import type { ProgressReporter } from './tasks.js';
 /** 一次整理记忆的结果。 */
 export interface CaptureOutcome {
     ok: boolean;
     /** 未执行时的原因码。 */
-    reason?: 'disabled' | 'model_not_configured' | 'busy' | 'no_workspaces' | 'no_sessions' | 'llm_error' | 'unparsable';
+    reason?: 'disabled' | 'model_not_configured' | 'busy' | 'no_workspaces' | 'no_sessions' | 'llm_error' | 'unparsable' | 'cancelled';
     /** 本次纳入整理的工作区数。 */
     workspaces: number;
     /** 参与整理的会话数（有新内容的）。 */
@@ -46,6 +47,8 @@ export interface CaptureRunOptions {
     workspace?: string;
     /** 未单独配置 provider / model 时使用的备用路由（通常是当前对话模型）。 */
     fallbackRoute?: ModelRoute;
+    /** 阶段进度上报：长任务注册表把它接到轮询接口上。 */
+    onProgress?: ProgressReporter;
 }
 /** 整理记忆执行器。 */
 export interface Capturer {

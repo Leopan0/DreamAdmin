@@ -7,13 +7,15 @@
  *      工作区模式下落点是 `<工作区>/memory`，没有工作区时回落
  *      `<DSH_HOME>/dream-admin/memory`。用户可以用任何编辑器直接改。
  *   2. 召回：`ctx.systemPrompt.context()` 注册动态 context，每个模型轮次把
- *      「置顶 + 最近更新」的记忆注入系统提示。
- *   3. 工具：`memory_search` / `memory_list` / `memory_forget`。
+ *      「置顶 + 最近更新」的记忆**摘要**注入系统提示（分层注入省 token），正文由
+ *      `memory_read` 按需读取。
+ *   3. 工具：`memory_search`（BM25 关键词 + 可选模型改写融合）/ `memory_read` /
+ *      `memory_list` / `memory_forget`。
  *   4. 整理记忆（可开关）：按间隔读取各工作区的历史会话（含已关闭的会话），
  *      调用用户指定的模型提炼出值得长期记住的事实并写入记忆库；也可以在对话框
- *      输入 `/memorysave` 立即整理一次。
+ *      输入 `/记忆` 立即整理一次（见 client/index.ts，直接调用本插件的 HTTP 接口）。
  *   5. 入梦（可开关）：按间隔调用用户指定的模型，对已有记忆做合并 / 去重 / 提炼；
- *      也可以在对话框输入 `/memoryup` 立即入梦一次。
+ *      也可以在对话框输入 `/入梦` 立即入梦一次。
  *
  * 另有一组 `GET/POST /dream-admin/*` 路由，供浏览器侧的「记忆管理」页面（与
  * 插件管理同级的顶级面板）读写记忆与配置。

@@ -1,11 +1,12 @@
 /**
- * 记忆召回：把当前工作区里「置顶 + 最近更新」的记忆注入系统提示。
+ * 记忆召回：把当前工作区里「置顶 + 最近更新」的记忆**摘要**注入系统提示。
  *
  * 用 `ctx.systemPrompt.context()` 注册一个**动态** context：每次模型轮次装配
  * 提示时它的 `text` 函数才被调用，因此读到的一定是最新的记忆库与最新的工作区。
  *
- * 这里注入的是「工作记忆」式的近期 + 置顶条目，而不是按当前提问做检索——
- * 装配期拿不到用户本轮消息。精确检索交给 `memory_search` 工具。
+ * 这里注入的是「工作记忆」式的近期 + 置顶条目，且只给标题 / 标签 / 摘要，
+ * 正文留给 `memory_read` 按需读取（分层注入省 token）；装配期拿不到用户本轮
+ * 消息，所以不做按提问的语义检索——精确检索交给 `memory_search` 工具。
  *
  * @module dream-admin/prompt
  */
@@ -13,7 +14,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-system-prompt';
 import type { ResolvedPluginConfig } from './config.js';
 import type { RootResolver } from './paths.js';
-import { listMemories, readMemory, renderRecall, truncate } from './store.js';
+import { listMemories, readMemory, renderRecall, truncate, type MemoryRecord } from './store.js';
 
 /** 注入系统提示的 context 名（全局唯一，避免与别的插件撞名）。 */
 const RECALL_CONTEXT_NAME = 'dream-admin:memory';
@@ -55,7 +56,7 @@ function buildRecallText(deps: RecallDeps): string {
     const summaries = listMemories(root).slice(0, recall.limit);
     if (summaries.length === 0) return '';
 
-    const records = [];
+    const records: MemoryRecord[] = [];
     for (const summary of summaries) {
       const record = readMemory(root, summary.id);
       if (record !== undefined) records.push(record);

@@ -643,8 +643,64 @@ details[open] > .summary::before {
   font: var(--dsw-font-xxs-12);
 }
 
+/* ---------- 长任务：进度条 + 取消 ---------- */
+
+.taskBox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+/* 取消按钮不跟着列宽撑满：只占自身内容宽度。 */
+.taskBox > button {
+  align-self: flex-start;
+  height: 26px;
+  padding: 0 10px;
+  font: var(--dsw-font-xxs-12);
+}
+
+.progress {
+  position: relative;
+  overflow: hidden;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--dsw-alias-fill-l1);
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--dsw-alias-state-business-primary);
+  transition: width 0.2s var(--ds-ease-in-out, ease-in-out);
+}
+
+/* 工作区总数未知时（total 为 0）走不确定态：一段色块来回滑动。 */
+.progressIndeterminate {
+  width: 40%;
+  animation: daSlide 1.1s ease-in-out infinite;
+}
+
+@keyframes daSlide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .dotSaving {
+    animation: none;
+  }
+
+  .progressIndeterminate {
+    width: 100%;
     animation: none;
   }
 
@@ -652,6 +708,7 @@ details[open] > .summary::before {
   .input,
   .switch,
   .switchThumb,
+  .progressFill,
   .summary::before {
     transition: none;
   }
